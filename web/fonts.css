@@ -1,0 +1,60 @@
+/* Self-hosted fonts — replaces the fonts.googleapis.com <link>s.
+ * Drop the .woff2 files listed below into web/fonts/ (names must match).
+ *
+ *   web/fonts/montserrat-400.woff2
+ *   web/fonts/montserrat-500.woff2
+ *   web/fonts/montserrat-600.woff2
+ *   web/fonts/raleway-600.woff2
+ *   web/fonts/raleway-700.woff2
+ *   web/fonts/material-symbols-outlined.woff2   (variable, weight 100..700)
+ */
+
+/* ---- Montserrat (body / labels) — weights 400, 500, 600 ---- */
+@font-face {
+    font-family: "Montserrat";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/fonts/montserrat-400.woff2") format("woff2");
+}
+@font-face {
+    font-family: "Montserrat";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("./fonts/montserrat-500.woff2") format("woff2");
+}
+@font-face {
+    font-family: "Montserrat";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("./fonts/montserrat-600.woff2") format("woff2");
+}
+
+/* ---- Raleway (headlines) — weights 600, 700 ---- */
+@font-face {
+    font-family: "Raleway";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("./fonts/raleway-600.woff2") format("woff2");
+}
+@font-face {
+    font-family: "Raleway";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("./fonts/raleway-700.woff2") format("woff2");
+}
+
+/* ---- Material Symbols Outlined (icons) — single variable file ----
+ * The axes (opsz/wght/FILL/GRAD) are driven by .material-symbols-outlined
+ * in index.html via font-variation-settings, so one variable file is enough. */
+@font-face {
+    font-family: "Material Symbols Outlined";
+    font-style: normal;
+    font-weight: 100 700;
+    font-display: block;
+    src: url("./fonts/material-symbols-outlined.woff2") format("woff2");
+}

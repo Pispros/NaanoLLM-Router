@@ -1,0 +1,42 @@
+{
+  "listen_addr": ":4000",
+  "slot_save_path": "",
+  "llama_bin": "",
+  "autostart": false,
+  "planner": {
+    "name": "planner",
+    "engine": "llamacpp",
+    "bin_path": "",
+    "base_url": "http://192.168.0.190:8080",
+    "model": "qwen3.5-9b",
+    "slots": 4,
+    "hf_repo": "",
+    "hf_file": "",
+    "model_path": "",
+    "extra_args": ""
+  },
+  "coder": {
+    "name": "coder",
+    "engine": "llamacpp",
+    "bin_path": "",
+    "base_url": "http://192.168.0.190:8081",
+    "model": "qwen2.5-coder-7b",
+    "slots": 4,
+    "hf_repo": "",
+    "hf_file": "",
+    "model_path": "",
+    "extra_args": ""
+  },
+  "router": {
+    "mode": "llm",
+    "base_url": "http://192.168.0.190:8082",
+    "model": "qwen3-0.6b",
+    "engine": "llamacpp",
+    "bin_path": "",
+    "hf_repo": "MaziyarPanahi/Qwen3-0.6B-GGUF",
+    "hf_file": "Qwen3-0.6B.Q4_K_M.gguf",
+    "model_path": "",
+    "extra_args": "",
+    "slots": 1
+  }
+}

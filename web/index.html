@@ -1,0 +1,2917 @@
+<!doctype html>
+<html class="dark" lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>NaanoLLM - Router</title>
+
+        <!-- Self-hosted fonts (@font-face -> /fonts/*.woff2) -->
+        <link href="/fonts.css" rel="stylesheet" />
+
+        <!-- Self-hosted Tailwind build. Compiled from tailwind.config.js with the
+     forms + container-queries plugins; drop the built file at web/tailwind.css. -->
+        <link href="/tailwind.css" rel="stylesheet" />
+
+        <style>
+            .material-symbols-outlined {
+                font-family: "Material Symbols Outlined";
+                font-weight: normal;
+                font-style: normal;
+                font-variation-settings:
+                    "FILL" 0,
+                    "wght" 400,
+                    "GRAD" 0,
+                    "opsz" 24;
+                font-size: 20px;
+                line-height: 1;
+                letter-spacing: normal;
+                text-transform: none;
+                display: inline-block;
+                white-space: nowrap;
+                word-wrap: normal;
+                direction: ltr;
+                -webkit-font-feature-settings: "liga";
+                font-feature-settings: "liga";
+                -webkit-font-smoothing: antialiased;
+                text-rendering: optimizeLegibility;
+            }
+            body {
+                background: #081425;
+                color: #d8e3fb;
+            }
+
+            /* nav items (JS toggles .active) */
+            .nav {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 10px 14px;
+                border-radius: 0.75rem;
+                color: #c6c6cd;
+                cursor: pointer;
+                user-select: none;
+                border: 1px solid transparent;
+                transition:
+                    background-color 0.18s,
+                    color 0.18s;
+            }
+            .nav:hover {
+                color: #d8e3fb;
+                background: #2a3548;
+            }
+            .nav .badge {
+                margin-left: auto;
+                font-family: Montserrat;
+                font-size: 12px;
+                color: #c6c6cd;
+            }
+            .nav.active {
+                background: #41474e;
+                color: #afb6bd;
+                font-weight: 700;
+            }
+            .nav.active .badge {
+                color: #afb6bd;
+            }
+
+            /* language switch */
+            .langswitch {
+                display: inline-flex;
+                align-items: stretch;
+                height: 36px;
+                border: 1px solid #45464d;
+                border-radius: 0.5rem;
+                overflow: hidden;
+            }
+            .langbtn {
+                display: inline-flex;
+                align-items: center;
+                padding: 0 12px;
+                font-family: Montserrat;
+                font-size: 12px;
+                font-weight: 600;
+                color: #c6c6cd;
+                background: transparent;
+                cursor: pointer;
+                border: 0;
+                transition:
+                    background-color 0.15s,
+                    color 0.15s;
+            }
+            .langbtn:hover {
+                color: #d8e3fb;
+            }
+            .langbtn.on {
+                background: #41474e;
+                color: #dae2fd;
+            }
+            .langbtn + .langbtn {
+                border-left: 1px solid #45464d;
+            }
+
+            /* sections (JS toggles .show) */
+            .section {
+                display: none;
+            }
+            .section.show {
+                display: block;
+            }
+
+            /* form fields — element+class selectors beat the forms-plugin attribute rules
+     (e.g. [type=number]) that otherwise paint inputs white */
+            input.fld,
+            select.fld,
+            textarea.fld {
+                width: 100%;
+                background-color: #2a3548;
+                color: #d8e3fb;
+                color-scheme: dark;
+                font-family:
+                    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                font-size: 13px;
+                padding: 11px 14px;
+                border: 0;
+                border-bottom: 1px solid #45464d;
+                border-top-left-radius: 0.25rem;
+                border-top-right-radius: 0.25rem;
+                transition:
+                    border-color 0.18s,
+                    box-shadow 0.18s;
+            }
+            input.fld::placeholder {
+                color: #6b7480;
+            }
+            input.fld:focus,
+            select.fld:focus {
+                outline: none;
+                border-bottom-color: #bec6e0;
+                box-shadow: 0 1px 0 0 #bec6e0;
+            }
+            select.fld {
+                appearance: none;
+                -webkit-appearance: none;
+                -moz-appearance: none;
+                background-image: none;
+                cursor: pointer;
+                padding-right: 38px;
+            }
+            .selwrap {
+                position: relative;
+            }
+            .selwrap .caret {
+                position: absolute;
+                right: 12px;
+                top: 50%;
+                transform: translateY(-50%);
+                pointer-events: none;
+                color: #c6c6cd;
+            }
+
+            /* help chat drawer */
+            #helpPanel {
+                transition: transform 0.28s ease;
+            }
+            #helpPanel.open {
+                transform: none !important;
+            }
+            textarea.fld {
+                line-height: 1.4;
+                min-height: 42px;
+                max-height: 140px;
+            }
+
+            /* hover tooltip (used by the Engine help icons) */
+            .tip {
+                position: relative;
+            }
+            .tip:hover::after {
+                content: attr(data-tip);
+                position: absolute;
+                left: 0;
+                top: 150%;
+                z-index: 60;
+                white-space: pre;
+                background: #1f2a3c;
+                color: #d8e3fb;
+                border: 1px solid #45464d;
+                border-radius: 0.5rem;
+                padding: 9px 12px;
+                font:
+                    400 12px/1.55 Montserrat,
+                    sans-serif;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+                width: max-content;
+                max-width: 340px;
+                pointer-events: none;
+            }
+            /* open toward the left edge — used inside the right-docked chat panel */
+            .tip.tip-left:hover::after {
+                left: auto;
+                right: 0;
+                white-space: normal;
+                width: 300px;
+            }
+
+            /* status dot */
+            .dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                background: #45464d;
+                flex: 0 0 auto;
+            }
+            .dot.ok {
+                background: #3fb950;
+            }
+            .dot.bad {
+                background: #ffb4ab;
+            }
+            .dot.warn {
+                background: #eab308;
+            }
+
+            /* routing rail */
+            .node {
+                padding: 13px 22px;
+                border-radius: 0.5rem;
+                border: 1px solid #45464d;
+                background: #152031;
+                font-family: Montserrat;
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: 0.1em;
+                color: #c6c6cd;
+                min-width: 120px;
+                text-align: center;
+                transition: 0.25s;
+            }
+            .node.on[data-role="planner"] {
+                color: #fff;
+                border-color: #8b8cff;
+                background: rgba(139, 140, 255, 0.12);
+                box-shadow: 0 0 0 1px #8b8cff inset;
+            }
+            .node.on[data-role="coder"] {
+                color: #fff;
+                border-color: #2dd4bf;
+                background: rgba(45, 212, 191, 0.12);
+                box-shadow: 0 0 0 1px #2dd4bf inset;
+            }
+            @media (prefers-reduced-motion: no-preference) {
+                .node.on {
+                    animation: pulse 2.4s ease-in-out infinite;
+                }
+                @keyframes pulse {
+                    0%,
+                    100% {
+                        filter: brightness(1);
+                    }
+                    50% {
+                        filter: brightness(1.18);
+                    }
+                }
+            }
+
+            /* slot bars */
+            .bar {
+                display: flex;
+                gap: 4px;
+            }
+            .seg {
+                height: 6px;
+                flex: 1;
+                border-radius: 2px;
+                background: #2a3548;
+                transition: background-color 0.25s;
+            }
+            .seg.full {
+                background: #8b8cff;
+            }
+            [data-acc="coder"] .seg.full {
+                background: #2dd4bf;
+            }
+
+            /* swatches */
+            .swatch {
+                width: 10px;
+                height: 10px;
+                border-radius: 3px;
+                flex: 0 0 auto;
+            }
+            .swatch.p {
+                background: #8b8cff;
+            }
+            .swatch.c {
+                background: #2dd4bf;
+            }
+            .swatch.r {
+                background: #d946ef;
+            }
+            .swatch.s {
+                background: #909097;
+            }
+
+            .toast {
+                font-size: 13px;
+                font-family: Montserrat;
+                color: #3fb950;
+                min-height: 18px;
+            }
+            .toast.err {
+                color: #ffb4ab;
+            }
+
+            ::-webkit-scrollbar {
+                width: 10px;
+                height: 10px;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: #2a3548;
+                border-radius: 6px;
+            }
+            ::-webkit-scrollbar-track {
+                background: transparent;
+            }
+        </style>
+    </head>
+
+    <body
+        class="bg-background text-on-background font-body-md antialiased flex min-h-screen"
+    >
+        <!-- ============ SIDEBAR ============ -->
+        <nav
+            class="fixed left-0 top-0 h-full w-64 border-r border-outline-variant bg-surface-container flex flex-col justify-between py-6 px-4 z-30"
+        >
+            <div>
+                <div class="mb-8 px-2 flex items-center gap-3">
+                    <div
+                        class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                        style="
+                            background: linear-gradient(
+                                135deg,
+                                #8b8cff,
+                                #2dd4bf
+                            );
+                        "
+                    >
+                        <span
+                            class="material-symbols-outlined text-[18px]"
+                            style="color: #0b0d12"
+                            >api</span
+                        >
+                    </div>
+                    <div>
+                        <h1
+                            class="font-headline-md text-headline-md font-bold text-on-surface leading-none"
+                        >
+                            NaanoLLM Router
+                        </h1>
+                        <p
+                            class="font-body-sm text-body-sm text-on-surface-variant mt-1"
+                        >
+                            /v1 · local
+                        </p>
+                    </div>
+                </div>
+
+                <ul class="space-y-1" id="nav">
+                    <li>
+                        <div class="nav active" data-sec="dashboard">
+                            <span class="material-symbols-outlined"
+                                >dashboard</span
+                            ><span
+                                class="font-body-md"
+                                data-i18n="nav.dashboard"
+                                >Dashboard</span
+                            >
+                        </div>
+                    </li>
+                    <li>
+                        <div class="nav" data-sec="engine">
+                            <span class="material-symbols-outlined"
+                                >rocket_launch</span
+                            ><span class="font-body-md" data-i18n="nav.engine"
+                                >Engine</span
+                            >
+                        </div>
+                    </li>
+                    <li>
+                        <div class="nav" data-sec="endpoints">
+                            <span class="material-symbols-outlined"
+                                >settings_input_component</span
+                            ><span
+                                class="font-body-md"
+                                data-i18n="nav.endpoints"
+                                >Endpoints</span
+                            >
+                        </div>
+                    </li>
+                    <li>
+                        <div class="nav" data-sec="router">
+                            <span class="material-symbols-outlined">router</span
+                            ><span class="font-body-md" data-i18n="nav.router"
+                                >Router</span
+                            >
+                        </div>
+                    </li>
+                    <li>
+                        <div class="nav" data-sec="server">
+                            <span class="material-symbols-outlined">dns</span
+                            ><span class="font-body-md" data-i18n="nav.server"
+                                >Server</span
+                            >
+                        </div>
+                    </li>
+                    <li>
+                        <div class="nav" data-sec="discussions">
+                            <span class="material-symbols-outlined">forum</span
+                            ><span
+                                class="font-body-md"
+                                data-i18n="nav.discussions"
+                                >Discussions</span
+                            >
+                            <span class="badge" id="navDisc">0</span>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="space-y-3 mt-auto pt-4">
+                <div
+                    class="flex items-center gap-2 px-4 py-2.5 bg-surface-container-highest border border-outline-variant rounded-lg"
+                >
+                    <span class="dot" id="pillDot"></span>
+                    <span
+                        class="font-body-sm text-body-sm text-on-surface-variant"
+                        ><span data-i18n="status.label">Status:</span>
+                        <span id="pillTxt">stopped</span></span
+                    >
+                </div>
+                <button
+                    id="start"
+                    class="w-full py-2.5 rounded-lg font-body-md font-semibold text-on-primary transition-[filter] hover:brightness-110 disabled:opacity-45 disabled:cursor-not-allowed"
+                    style="background: #8b8cff"
+                    data-i18n="btn.start"
+                >
+                    Start
+                </button>
+                <button
+                    id="stop"
+                    class="w-full py-2.5 rounded-lg font-body-md font-semibold bg-transparent border border-error text-error transition-colors hover:bg-error hover:text-on-error disabled:opacity-45 disabled:cursor-not-allowed"
+                    data-i18n="btn.stop"
+                >
+                    Stop
+                </button>
+                <div class="toast px-1" id="toast"></div>
+            </div>
+        </nav>
+
+        <!-- ============ MAIN ============ -->
+        <div class="ml-64 flex-1 flex flex-col min-h-screen">
+            <header
+                class="sticky top-0 z-20 flex items-center justify-between h-16 px-margin-page bg-background border-b border-outline-variant/40"
+            >
+                <h2
+                    class="font-headline-md text-headline-md font-bold text-on-surface"
+                    id="topTitle"
+                >
+                    Dashboard
+                </h2>
+                <div class="flex items-center gap-4 text-on-surface-variant">
+                    <div class="langswitch" id="langswitch">
+                        <button class="langbtn" data-lang="en">EN</button>
+                        <button class="langbtn" data-lang="fr">FR</button>
+                    </div>
+                    <a
+                        href="#"
+                        id="helpBtn"
+                        class="inline-flex items-center justify-center w-9 h-9 rounded-full hover:bg-surface-variant hover:text-on-surface transition-colors"
+                        data-i18n-title="ui.help"
+                        title="Help"
+                        ><span class="material-symbols-outlined"
+                            >help_outline</span
+                        ></a
+                    >
+                </div>
+            </header>
+
+            <main class="flex-1 px-margin-page py-10 w-full">
+                <!-- DASHBOARD -->
+                <section class="section show" data-sec="dashboard">
+                    <div class="mb-8">
+                        <p
+                            class="font-body-md text-body-md text-on-surface-variant"
+                            data-i18n="dash.subtitle"
+                        >
+                            What's running and what still needs attention before
+                            you route traffic.
+                        </p>
+                    </div>
+
+                    <section class="mb-8">
+                        <div
+                            class="bg-surface-container-low border border-outline-variant rounded-xl p-6"
+                        >
+                            <h3
+                                class="font-label-caps text-label-caps text-on-surface-variant tracking-widest mb-6"
+                                data-i18n="dash.routing"
+                            >
+                                ROUTING
+                            </h3>
+                            <div class="flex items-center mb-6">
+                                <div
+                                    class="node"
+                                    data-role="planner"
+                                    id="nodePlanner"
+                                >
+                                    PLANNER
+                                </div>
+                                <div
+                                    class="flex-1 h-px bg-outline-variant mx-4"
+                                ></div>
+                                <div
+                                    class="node"
+                                    data-role="coder"
+                                    id="nodeCoder"
+                                >
+                                    CODER
+                                </div>
+                            </div>
+                            <div
+                                class="flex items-center gap-6 flex-wrap font-body-sm text-body-sm text-on-surface-variant"
+                            >
+                                <span
+                                    ><span data-i18n="dash.lastRoute"
+                                        >last route</span
+                                    >
+                                    <strong
+                                        class="text-on-surface font-semibold ml-1"
+                                        id="vLast"
+                                        >—</strong
+                                    ></span
+                                >
+                                <span
+                                    ><span data-i18n="dash.discussions"
+                                        >discussions</span
+                                    >
+                                    <strong
+                                        class="text-on-surface font-semibold ml-1"
+                                        id="vDisc"
+                                        >0</strong
+                                    ></span
+                                >
+                                <span
+                                    ><span data-i18n="dash.endpoint"
+                                        >endpoint</span
+                                    >
+                                    <strong
+                                        class="text-on-surface font-semibold ml-1 font-mono"
+                                        id="vBase"
+                                        >—</strong
+                                    ></span
+                                >
+                            </div>
+                        </div>
+                    </section>
+
+                    <section>
+                        <h3
+                            class="font-label-caps text-label-caps text-on-surface-variant tracking-widest mb-4 px-1"
+                            data-i18n="dash.setup"
+                        >
+                            SETUP
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+                            <div
+                                class="bg-surface-container-low border border-outline-variant rounded-xl p-5"
+                                data-acc="planner"
+                            >
+                                <div
+                                    class="flex items-center justify-between mb-3"
+                                >
+                                    <div class="flex items-center gap-2">
+                                        <span class="swatch p"></span>
+                                        <h4
+                                            class="font-body-md font-semibold text-on-surface"
+                                            data-i18n="card.planner"
+                                        >
+                                            Planner
+                                        </h4>
+                                    </div>
+                                    <div
+                                        class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                                    >
+                                        <span class="dot" id="dPlanner"></span
+                                        ><span id="sPlanner">—</span>
+                                    </div>
+                                </div>
+                                <p
+                                    class="font-body-sm text-body-sm text-on-surface-variant"
+                                    id="lPlanner"
+                                >
+                                    —
+                                </p>
+                                <div class="bar mt-4" id="barPlanner"></div>
+                            </div>
+
+                            <div
+                                class="bg-surface-container-low border border-outline-variant rounded-xl p-5"
+                                data-acc="coder"
+                            >
+                                <div
+                                    class="flex items-center justify-between mb-3"
+                                >
+                                    <div class="flex items-center gap-2">
+                                        <span class="swatch c"></span>
+                                        <h4
+                                            class="font-body-md font-semibold text-on-surface"
+                                            data-i18n="card.coder"
+                                        >
+                                            Coder
+                                        </h4>
+                                    </div>
+                                    <div
+                                        class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                                    >
+                                        <span class="dot" id="dCoder"></span
+                                        ><span id="sCoder">—</span>
+                                    </div>
+                                </div>
+                                <p
+                                    class="font-body-sm text-body-sm text-on-surface-variant"
+                                    id="lCoder"
+                                >
+                                    —
+                                </p>
+                                <div class="bar mt-4" id="barCoder"></div>
+                            </div>
+
+                            <div
+                                class="bg-surface-container-low border border-outline-variant rounded-xl p-5"
+                            >
+                                <div
+                                    class="flex items-center justify-between mb-3"
+                                >
+                                    <div class="flex items-center gap-2">
+                                        <span class="swatch r"></span>
+                                        <h4
+                                            class="font-body-md font-semibold text-on-surface"
+                                            data-i18n="card.router"
+                                        >
+                                            Router
+                                        </h4>
+                                    </div>
+                                    <div
+                                        class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                                    >
+                                        <span class="dot" id="dRouter"></span
+                                        ><span id="sRouter">—</span>
+                                    </div>
+                                </div>
+                                <p
+                                    class="font-body-sm text-body-sm text-on-surface-variant"
+                                    id="lRouter"
+                                >
+                                    —
+                                </p>
+                            </div>
+
+                            <div
+                                class="bg-surface-container-low border border-outline-variant rounded-xl p-5"
+                            >
+                                <div
+                                    class="flex items-center justify-between mb-3"
+                                >
+                                    <div class="flex items-center gap-2">
+                                        <span class="swatch s"></span>
+                                        <h4
+                                            class="font-body-md font-semibold text-on-surface"
+                                            data-i18n="card.server"
+                                        >
+                                            Server
+                                        </h4>
+                                    </div>
+                                    <div
+                                        class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                                    >
+                                        <span class="dot" id="dServer"></span
+                                        ><span id="sServer">—</span>
+                                    </div>
+                                </div>
+                                <p
+                                    class="font-body-sm text-body-sm text-on-surface-variant"
+                                    id="lServer"
+                                >
+                                    —
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- ENDPOINTS -->
+                <section class="section" data-sec="endpoints">
+                    <div class="mb-8">
+                        <p
+                            class="font-body-md text-body-md text-on-surface-variant"
+                            data-i18n="ep.subtitle"
+                        >
+                            Two resident llama-server backends. Slots is each
+                            server's -np value: the number of discussions it can
+                            keep warm at once.
+                        </p>
+                    </div>
+
+                    <div
+                        class="bg-surface-container-low border border-outline-variant rounded-xl p-8"
+                    >
+                        <section class="mb-10">
+                            <h3
+                                class="font-body-md text-on-surface mb-6 flex items-center gap-2"
+                            >
+                                <span class="swatch p"></span
+                                ><span data-i18n="card.planner">Planner</span>
+                                <span
+                                    class="text-on-surface-variant"
+                                    data-i18n="ep.plannerRole"
+                                    >— reasoning, RAG, builds the plan</span
+                                >
+                            </h3>
+                            <div
+                                class="grid grid-cols-1 md:grid-cols-2 gap-gutter mb-6"
+                            >
+                                <div class="flex flex-col gap-2">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="ep.baseUrl"
+                                        >Base URL</label
+                                    >
+                                    <input
+                                        id="pBase"
+                                        class="fld"
+                                        placeholder="http://127.0.0.1:8080"
+                                    />
+                                </div>
+                                <div class="flex flex-col gap-2">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="ep.modelAlias"
+                                        >Model alias</label
+                                    >
+                                    <input
+                                        id="pModel"
+                                        class="fld"
+                                        placeholder="qwen3.5-9b"
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                class="grid grid-cols-1 md:grid-cols-2 gap-gutter"
+                            >
+                                <div class="flex flex-col gap-2">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="ep.slots"
+                                        >Parallel slots (-np)</label
+                                    >
+                                    <input
+                                        id="pSlots"
+                                        type="number"
+                                        min="1"
+                                        value="4"
+                                        class="fld"
+                                    />
+                                </div>
+                            </div>
+                        </section>
+
+                        <hr class="border-outline-variant mb-10" />
+
+                        <section class="mb-10">
+                            <h3
+                                class="font-body-md text-on-surface mb-6 flex items-center gap-2"
+                            >
+                                <span class="swatch c"></span
+                                ><span data-i18n="card.coder">Coder</span>
+                                <span
+                                    class="text-on-surface-variant"
+                                    data-i18n="ep.coderRole"
+                                    >— executes one subtask, ends with
+                                    FINISH</span
+                                >
+                            </h3>
+                            <div
+                                class="grid grid-cols-1 md:grid-cols-2 gap-gutter mb-6"
+                            >
+                                <div class="flex flex-col gap-2">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="ep.baseUrl"
+                                        >Base URL</label
+                                    >
+                                    <input
+                                        id="cBase"
+                                        class="fld"
+                                        placeholder="http://127.0.0.1:8081"
+                                    />
+                                </div>
+                                <div class="flex flex-col gap-2">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="ep.modelAlias"
+                                        >Model alias</label
+                                    >
+                                    <input
+                                        id="cModel"
+                                        class="fld"
+                                        placeholder="qwen2.5-coder-7b"
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                class="grid grid-cols-1 md:grid-cols-2 gap-gutter"
+                            >
+                                <div class="flex flex-col gap-2">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="ep.slots"
+                                        >Parallel slots (-np)</label
+                                    >
+                                    <input
+                                        id="cSlots"
+                                        type="number"
+                                        min="1"
+                                        value="4"
+                                        class="fld"
+                                    />
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="pt-2 flex items-center gap-4 flex-wrap">
+                            <button
+                                id="save1"
+                                class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-md px-6 py-2.5 rounded-lg transition-colors"
+                                data-i18n="ep.save"
+                            >
+                                Save endpoints
+                            </button>
+                            <span class="toast" id="toast1"></span>
+                        </div>
+                        <p
+                            class="font-body-sm text-body-sm text-on-surface-variant/80 mt-4 font-mono"
+                            data-i18n="ep.note"
+                        >
+                            Slot counts apply when you next click Start.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- ENGINE -->
+                <section class="section" data-sec="engine">
+                    <div class="mb-8">
+                        <p
+                            class="font-body-md text-body-md text-on-surface-variant"
+                            data-i18n="eng.subtitle"
+                        >
+                            Choose an inference engine per role, point to the
+                            binary you installed, pick a model, and launch — all
+                            from here.
+                        </p>
+                        <p
+                            class="font-body-sm text-body-sm text-on-surface-variant mt-2"
+                        >
+                            <span data-i18n="eng.guidePrefix"
+                                >New to inference engines?</span
+                            >
+                            <a
+                                class="text-primary underline hover:text-primary-fixed"
+                                href="https://deploybase.ai/articles/best-llm-inference-engine"
+                                target="_blank"
+                                rel="noopener"
+                                data-i18n="eng.guideLink"
+                                >Read a guide to the engines and how to install
+                                them</a
+                            >
+                        </p>
+                    </div>
+
+                    <div
+                        class="flex items-start gap-3 bg-surface-container-high border border-dashed border-outline-variant rounded-xl p-5 mb-gutter"
+                    >
+                        <span
+                            class="material-symbols-outlined text-on-surface-variant shrink-0"
+                            >info</span
+                        >
+                        <p
+                            class="font-body-sm text-body-sm text-on-surface-variant"
+                            data-i18n="eng.bareNote"
+                        >
+                            Heads up: this tab launches each engine with a
+                            minimal, portable command — no hardware tuning (GPU
+                            offload, KV-cache quantization, context size,
+                            tensor-parallel, slot persistence…). For best
+                            performance, run each engine as your own service or
+                            script tuned to your hardware and context, then just
+                            point the Endpoints tab at its base URL — you can
+                            skip this tab entirely.
+                        </p>
+                    </div>
+
+                    <div
+                        class="grid grid-cols-1 md:grid-cols-2 gap-gutter mb-gutter"
+                    >
+                        <div
+                            class="bg-surface-container-low border border-outline-variant rounded-xl p-6"
+                            data-acc="planner"
+                        >
+                            <div class="flex items-center justify-between mb-5">
+                                <div class="flex items-center gap-2">
+                                    <span class="swatch p"></span>
+                                    <h4
+                                        class="font-body-md font-semibold text-on-surface"
+                                        data-i18n="eng.plannerModel"
+                                    >
+                                        Planner
+                                    </h4>
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                                >
+                                    <span class="dot" id="procP"></span
+                                    ><span id="procPtxt">—</span>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2 mb-4">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.engine"
+                                    >Inference engine</label
+                                >
+                                <div class="selwrap">
+                                    <select id="engineP" class="fld"></select
+                                    ><span
+                                        class="material-symbols-outlined caret"
+                                        >expand_more</span
+                                    >
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2 mb-3">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1 flex items-center gap-2"
+                                >
+                                    <span data-i18n="eng.binLabel"
+                                        >Binary path</span
+                                    >
+                                    <span
+                                        class="material-symbols-outlined text-[16px] cursor-help align-middle tip"
+                                        id="binHelpP"
+                                        title=""
+                                        >help</span
+                                    ></label
+                                >
+                                <input
+                                    id="binP"
+                                    class="fld"
+                                    placeholder="/usr/local/bin/llama-server"
+                                />
+                            </div>
+                            <div class="flex items-center gap-3 flex-wrap mb-2">
+                                <button
+                                    id="testP"
+                                    class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-sm px-4 py-2 rounded-lg transition-colors"
+                                    data-i18n="eng.test"
+                                >
+                                    Test
+                                </button>
+                                <span class="toast" id="binResP"></span>
+                            </div>
+
+                            <div
+                                class="flex flex-col gap-2 mb-3"
+                                id="searchWrapP"
+                            >
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.search"
+                                    >Find a model</label
+                                >
+                                <div class="relative">
+                                    <input
+                                        id="hfqP"
+                                        class="fld"
+                                        data-i18n-ph="eng.searchPh"
+                                        placeholder="Search Hugging Face"
+                                    />
+                                    <div
+                                        id="hfresP"
+                                        class="hidden absolute z-10 left-0 right-0 mt-1 bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden max-h-64 overflow-y-auto shadow-lg"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col gap-2 mb-3">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    id="repoLblP"
+                                    data-i18n="eng.repo"
+                                    >Repository</label
+                                >
+                                <input
+                                    id="repoP"
+                                    class="fld"
+                                    placeholder="unsloth/Qwen3.5-9B-GGUF"
+                                />
+                            </div>
+                            <div
+                                class="flex flex-col gap-2 mb-5"
+                                id="fileWrapP"
+                            >
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.file"
+                                    >Quant file (.gguf)</label
+                                >
+                                <input
+                                    id="fileP"
+                                    class="fld"
+                                    list="filesP"
+                                    placeholder="…Q4_K_M.gguf"
+                                /><datalist id="filesP"></datalist>
+                            </div>
+
+                            <div class="flex items-center gap-3 flex-wrap">
+                                <button
+                                    id="launchP"
+                                    class="text-on-primary font-body-md font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-[filter]"
+                                    style="background: #8b8cff"
+                                    data-i18n="eng.launch"
+                                >
+                                    Launch
+                                </button>
+                                <button
+                                    id="stopP"
+                                    class="bg-transparent border border-outline-variant text-on-surface-variant font-body-md px-5 py-2 rounded-lg hover:text-on-surface hover:border-on-surface transition-colors"
+                                    data-i18n="eng.stop"
+                                >
+                                    Stop
+                                </button>
+                                <span class="toast" id="launchPtoast"></span>
+                            </div>
+                        </div>
+
+                        <div
+                            class="bg-surface-container-low border border-outline-variant rounded-xl p-6"
+                            data-acc="coder"
+                        >
+                            <div class="flex items-center justify-between mb-5">
+                                <div class="flex items-center gap-2">
+                                    <span class="swatch c"></span>
+                                    <h4
+                                        class="font-body-md font-semibold text-on-surface"
+                                        data-i18n="eng.coderModel"
+                                    >
+                                        Coder
+                                    </h4>
+                                </div>
+                                <div
+                                    class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                                >
+                                    <span class="dot" id="procC"></span
+                                    ><span id="procCtxt">—</span>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2 mb-4">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.engine"
+                                    >Inference engine</label
+                                >
+                                <div class="selwrap">
+                                    <select id="engineC" class="fld"></select
+                                    ><span
+                                        class="material-symbols-outlined caret"
+                                        >expand_more</span
+                                    >
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2 mb-3">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1 flex items-center gap-2"
+                                >
+                                    <span data-i18n="eng.binLabel"
+                                        >Binary path</span
+                                    >
+                                    <span
+                                        class="material-symbols-outlined text-[16px] cursor-help align-middle tip"
+                                        id="binHelpC"
+                                        title=""
+                                        >help</span
+                                    ></label
+                                >
+                                <input
+                                    id="binC"
+                                    class="fld"
+                                    placeholder="/usr/local/bin/llama-server"
+                                />
+                            </div>
+                            <div class="flex items-center gap-3 flex-wrap mb-2">
+                                <button
+                                    id="testC"
+                                    class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-sm px-4 py-2 rounded-lg transition-colors"
+                                    data-i18n="eng.test"
+                                >
+                                    Test
+                                </button>
+                                <span class="toast" id="binResC"></span>
+                            </div>
+
+                            <div
+                                class="flex flex-col gap-2 mb-3"
+                                id="searchWrapC"
+                            >
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.search"
+                                    >Find a model</label
+                                >
+                                <div class="relative">
+                                    <input
+                                        id="hfqC"
+                                        class="fld"
+                                        data-i18n-ph="eng.searchPh"
+                                        placeholder="Search Hugging Face"
+                                    />
+                                    <div
+                                        id="hfresC"
+                                        class="hidden absolute z-10 left-0 right-0 mt-1 bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden max-h-64 overflow-y-auto shadow-lg"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col gap-2 mb-3">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    id="repoLblC"
+                                    data-i18n="eng.repo"
+                                    >Repository</label
+                                >
+                                <input
+                                    id="repoC"
+                                    class="fld"
+                                    placeholder="unsloth/Qwen2.5-Coder-7B-GGUF"
+                                />
+                            </div>
+                            <div
+                                class="flex flex-col gap-2 mb-5"
+                                id="fileWrapC"
+                            >
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.file"
+                                    >Quant file (.gguf)</label
+                                >
+                                <input
+                                    id="fileC"
+                                    class="fld"
+                                    list="filesC"
+                                    placeholder="…Q4_K_M.gguf"
+                                /><datalist id="filesC"></datalist>
+                            </div>
+
+                            <div class="flex items-center gap-3 flex-wrap">
+                                <button
+                                    id="launchC"
+                                    class="text-on-primary font-body-md font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-[filter]"
+                                    style="background: #2dd4bf"
+                                    data-i18n="eng.launch"
+                                >
+                                    Launch
+                                </button>
+                                <button
+                                    id="stopC"
+                                    class="bg-transparent border border-outline-variant text-on-surface-variant font-body-md px-5 py-2 rounded-lg hover:text-on-surface hover:border-on-surface transition-colors"
+                                    data-i18n="eng.stop"
+                                >
+                                    Stop
+                                </button>
+                                <span class="toast" id="launchCtoast"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- autostart + save -->
+                    <div
+                        class="bg-surface-container-high border border-outline-variant/40 rounded-xl p-8"
+                    >
+                        <label
+                            class="flex items-center gap-3 cursor-pointer mb-2"
+                        >
+                            <input
+                                type="checkbox"
+                                id="autostart"
+                                class="w-4 h-4 rounded border-outline-variant bg-surface-container-highest text-primary focus:ring-0 focus:ring-offset-0"
+                            />
+                            <span
+                                class="font-body-md text-on-surface"
+                                data-i18n="eng.autostart"
+                                >Auto-start everything when the server
+                                boots</span
+                            >
+                        </label>
+                        <p
+                            class="font-body-sm text-body-sm text-on-surface-variant ml-7 mb-6"
+                            data-i18n="eng.autostartHint"
+                        >
+                            When enabled, starting naanollm-router also launches
+                            the planner and coder and arms /v1 once both are
+                            healthy.
+                        </p>
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <button
+                                id="saveEngine"
+                                class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-md px-6 py-2.5 rounded-lg transition-colors"
+                                data-i18n="eng.save"
+                            >
+                                Save config
+                            </button>
+                            <span class="toast" id="engineToast"></span>
+                        </div>
+                        <p
+                            class="font-body-sm text-body-sm text-on-surface-variant/80 mt-4"
+                            data-i18n="eng.note"
+                        >
+                            Alias, port and parallel slots come from the
+                            Endpoints tab.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- ROUTER -->
+                <section class="section" data-sec="router">
+                    <div class="mb-8">
+                        <p
+                            class="font-body-md text-body-md text-on-surface-variant"
+                            data-i18n="router.subtitle"
+                        >
+                            Decides per turn whether a message goes to the
+                            planner or the coder.
+                        </p>
+                    </div>
+
+                    <div
+                        class="relative overflow-hidden bg-surface-container border border-outline-variant rounded-xl p-8 shadow-lg"
+                    >
+                        <div
+                            class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary/30 to-transparent"
+                        ></div>
+                        <div
+                            class="grid grid-cols-1 md:grid-cols-2 gap-gutter mb-8"
+                        >
+                            <div class="flex flex-col gap-2">
+                                <label
+                                    class="font-label-caps text-label-caps text-on-surface-variant"
+                                    data-i18n="router.mode"
+                                    >Mode</label
+                                >
+                                <div class="selwrap">
+                                    <select id="rMode" class="fld">
+                                        <option
+                                            value="rule"
+                                            data-i18n="router.optRule"
+                                        >
+                                            rule — state + keywords (no model)
+                                        </option>
+                                        <option
+                                            value="llm"
+                                            data-i18n="router.optLlm"
+                                        >
+                                            llm — tiny model breaks ties
+                                        </option>
+                                    </select>
+                                    <span
+                                        class="material-symbols-outlined caret"
+                                        >expand_more</span
+                                    >
+                                </div>
+                            </div>
+                            <div class="flex flex-col gap-2">
+                                <label
+                                    class="font-label-caps text-label-caps text-on-surface-variant"
+                                    data-i18n="router.modelAlias"
+                                    >Router model alias</label
+                                >
+                                <input
+                                    id="rModel"
+                                    class="fld"
+                                    placeholder="qwen3-0.6b"
+                                />
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2 mb-8">
+                            <label
+                                class="font-label-caps text-label-caps text-on-surface-variant"
+                                data-i18n="router.baseUrl"
+                                >Router base URL (mode llm)</label
+                            >
+                            <input
+                                id="rBase"
+                                class="fld"
+                                placeholder="http://127.0.0.1:8082"
+                            />
+                        </div>
+
+                        <div
+                            class="pt-6 border-t border-outline-variant/50 flex items-center gap-4 flex-wrap"
+                        >
+                            <button
+                                id="save2"
+                                class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-md px-6 py-2.5 rounded-lg transition-colors"
+                                data-i18n="router.save"
+                            >
+                                Save router
+                            </button>
+                            <span class="toast" id="toast2"></span>
+                        </div>
+                    </div>
+
+                    <!-- managed router model (mode llm) -->
+                    <div
+                        id="routerManaged"
+                        class="bg-surface-container-low border border-outline-variant rounded-xl p-6 mt-gutter"
+                        data-acc="router"
+                        style="display: none"
+                    >
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-2">
+                                <span class="swatch r"></span>
+                                <h4
+                                    class="font-body-md font-semibold text-on-surface"
+                                    data-i18n="router.modelTitle"
+                                >
+                                    Router model (mode llm)
+                                </h4>
+                            </div>
+                            <div
+                                class="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm"
+                            >
+                                <span class="dot" id="procR"></span
+                                ><span id="procRtxt">—</span>
+                            </div>
+                        </div>
+
+                        <div
+                            class="flex items-start gap-3 bg-router/10 border border-router/30 rounded-lg p-4 mb-5"
+                        >
+                            <span
+                                class="material-symbols-outlined text-router shrink-0"
+                                style="
+                                    font-variation-settings: &quot;FILL&quot; 1;
+                                "
+                                >lightbulb</span
+                            >
+                            <div class="flex-1">
+                                <p
+                                    class="font-body-sm text-body-sm text-on-surface"
+                                    data-i18n="router.recText"
+                                >
+                                    The router only classifies each turn
+                                    (planner vs coder), so a tiny instruct model
+                                    is plenty. Recommended: Qwen3-0.6B on
+                                    llama.cpp.
+                                </p>
+                                <button
+                                    id="useRecRouter"
+                                    class="mt-3 bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-sm px-4 py-1.5 rounded-lg transition-colors"
+                                    data-i18n="router.useRec"
+                                >
+                                    Use recommended
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-2 mb-4">
+                            <label
+                                class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                data-i18n="eng.engine"
+                                >Inference engine</label
+                            >
+                            <div class="selwrap">
+                                <select id="engineR" class="fld"></select
+                                ><span class="material-symbols-outlined caret"
+                                    >expand_more</span
+                                >
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-2 mb-3">
+                            <label
+                                class="font-body-sm text-body-sm text-on-surface-variant ml-1 flex items-center gap-2"
+                            >
+                                <span data-i18n="eng.binLabel"
+                                    >Binary path</span
+                                >
+                                <span
+                                    class="material-symbols-outlined text-[16px] cursor-help align-middle tip"
+                                    id="binHelpR"
+                                    title=""
+                                    >help</span
+                                ></label
+                            >
+                            <input
+                                id="binR"
+                                class="fld"
+                                placeholder="/usr/local/bin/llama-server"
+                            />
+                        </div>
+                        <div class="flex items-center gap-3 flex-wrap mb-2">
+                            <button
+                                id="testR"
+                                class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-sm px-4 py-2 rounded-lg transition-colors"
+                                data-i18n="eng.test"
+                            >
+                                Test
+                            </button>
+                            <span class="toast" id="binResR"></span>
+                        </div>
+
+                        <div class="flex flex-col gap-2 mb-3" id="searchWrapR">
+                            <label
+                                class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                data-i18n="eng.search"
+                                >Find a model</label
+                            >
+                            <div class="relative">
+                                <input
+                                    id="hfqR"
+                                    class="fld"
+                                    data-i18n-ph="eng.searchPh"
+                                    placeholder="Search Hugging Face"
+                                />
+                                <div
+                                    id="hfresR"
+                                    class="hidden absolute z-10 left-0 right-0 mt-1 bg-surface-container-high border border-outline-variant rounded-lg overflow-hidden max-h-64 overflow-y-auto shadow-lg"
+                                ></div>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2 mb-3">
+                            <label
+                                class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                id="repoLblR"
+                                data-i18n="eng.repo"
+                                >Repository</label
+                            >
+                            <input
+                                id="repoR"
+                                class="fld"
+                                placeholder="unsloth/Qwen3-0.6B-GGUF"
+                            />
+                        </div>
+                        <div class="flex flex-col gap-2 mb-5" id="fileWrapR">
+                            <label
+                                class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                data-i18n="eng.file"
+                                >Quant file (.gguf)</label
+                            >
+                            <input
+                                id="fileR"
+                                class="fld"
+                                list="filesR"
+                                placeholder="…Q4_K_M.gguf"
+                            /><datalist id="filesR"></datalist>
+                        </div>
+
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <button
+                                id="launchR"
+                                class="text-on-primary font-body-md font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-[filter]"
+                                style="background: #d946ef"
+                                data-i18n="eng.launch"
+                            >
+                                Launch
+                            </button>
+                            <button
+                                id="stopR"
+                                class="bg-transparent border border-outline-variant text-on-surface-variant font-body-md px-5 py-2 rounded-lg hover:text-on-surface hover:border-on-surface transition-colors"
+                                data-i18n="eng.stop"
+                            >
+                                Stop
+                            </button>
+                            <span class="toast" id="launchRtoast"></span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- SERVER -->
+                <section class="section" data-sec="server">
+                    <div class="mb-8">
+                        <p
+                            class="font-body-md text-body-md text-on-surface-variant"
+                            data-i18n="server.subtitle"
+                        >
+                            The OpenAI-compatible endpoint and optional on-disk
+                            KV persistence. The database is created
+                            automatically.
+                        </p>
+                    </div>
+
+                    <div
+                        class="bg-surface-container-high border border-outline-variant/40 rounded-xl p-8 space-y-8"
+                    >
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+                            <div class="flex flex-col gap-2">
+                                <label
+                                    class="font-label-caps text-label-caps text-on-surface-variant"
+                                    data-i18n="server.listen"
+                                    >Listen address</label
+                                >
+                                <input
+                                    id="addr"
+                                    class="fld"
+                                    placeholder=":4000"
+                                />
+                            </div>
+                            <div class="flex flex-col gap-2">
+                                <label
+                                    class="font-label-caps text-label-caps text-on-surface-variant"
+                                    data-i18n="server.slotPath"
+                                    >Slot save path (optional)</label
+                                >
+                                <input
+                                    id="slotPath"
+                                    class="fld"
+                                    data-i18n-ph="server.slotPathPh"
+                                    placeholder="empty = caches stay in hot slots only"
+                                />
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <button
+                                id="save3"
+                                class="bg-surface-container-highest border border-outline-variant hover:border-secondary text-on-surface font-body-md px-6 py-2.5 rounded-lg transition-colors"
+                                data-i18n="server.save"
+                            >
+                                Save server
+                            </button>
+                            <span class="toast" id="toast3"></span>
+                        </div>
+
+                        <div
+                            class="bg-primary-container/50 border border-dashed border-outline-variant/40 rounded-lg p-6 space-y-4"
+                        >
+                            <p
+                                class="font-body-sm text-body-sm font-mono text-primary bg-surface-container-highest p-3 rounded border border-outline-variant/30 inline-block"
+                            >
+                                <span data-i18n="server.hint1"
+                                    >Point your IDE's OpenAI base URL at </span
+                                ><span id="baseUrl" class="text-on-surface"
+                                    >http://localhost:4000/v1</span
+                                ><span data-i18n="server.hint2">, model </span
+                                ><span class="font-bold text-on-surface"
+                                    >auto</span
+                                ><span>.</span>
+                            </p>
+                            <p
+                                class="font-body-sm text-body-sm text-on-surface-variant"
+                            >
+                                <span data-i18n="server.note1"
+                                    >Slot save path must match each llama-server </span
+                                ><code
+                                    class="bg-surface-container-highest px-1.5 py-0.5 rounded text-on-surface text-xs"
+                                    >--slot-save-path</code
+                                ><span data-i18n="server.note2"
+                                    >. Changing the listen address needs a
+                                    binary restart.</span
+                                >
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- DISCUSSIONS -->
+                <section class="section" data-sec="discussions">
+                    <div class="mb-8">
+                        <p
+                            class="font-body-md text-body-md text-on-surface-variant"
+                            data-i18n="disc.subtitle"
+                        >
+                            Each is an independent flow with its own per-role
+                            context and slot. Most recently used first.
+                        </p>
+                    </div>
+
+                    <div
+                        class="bg-surface-container-high border border-outline-variant rounded-xl overflow-hidden"
+                    >
+                        <div
+                            class="grid grid-cols-3 gap-4 px-6 py-4 border-b border-outline-variant bg-surface-container-highest/50"
+                        >
+                            <div
+                                class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider"
+                                data-i18n="disc.id"
+                            >
+                                id
+                            </div>
+                            <div
+                                class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider"
+                                data-i18n="disc.turns"
+                            >
+                                turns
+                            </div>
+                            <div
+                                class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider"
+                                data-i18n="disc.lastUsed"
+                            >
+                                last used
+                            </div>
+                        </div>
+                        <div id="discBody"></div>
+                        <div
+                            class="px-6 py-8 font-body-md text-body-md text-on-surface-variant"
+                            id="discEmpty"
+                            style="display: none"
+                            data-i18n="disc.empty"
+                        >
+                            No discussions yet. They appear once a client sends
+                            a request.
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <!-- HELP CHAT -->
+        <div
+            id="helpBackdrop"
+            class="fixed inset-0 bg-black/40 z-40 hidden"
+        ></div>
+        <aside
+            id="helpPanel"
+            class="fixed right-0 top-0 h-full w-[380px] max-w-full bg-surface-container border-l border-outline-variant z-50 flex flex-col translate-x-full"
+        >
+            <div
+                class="flex items-center justify-between px-5 h-16 border-b border-outline-variant shrink-0"
+            >
+                <div class="flex items-center gap-2 min-w-0">
+                    <h3
+                        class="font-headline-md text-body-lg font-semibold text-on-surface truncate"
+                        data-i18n="help.title"
+                    >
+                        Chat
+                    </h3>
+                    <span
+                        class="material-symbols-outlined text-on-surface-variant text-[18px] cursor-help align-middle shrink-0 tip tip-left"
+                        data-i18n-tip="help.tip"
+                        data-tip=""
+                        >info</span
+                    >
+                </div>
+                <button
+                    id="helpClose"
+                    class="inline-flex items-center justify-center w-9 h-9 rounded-full text-on-surface-variant hover:bg-surface-variant hover:text-on-surface transition-colors shrink-0"
+                    data-i18n-title="help.close"
+                    title="Close"
+                >
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div id="helpMessages" class="flex-1 overflow-y-auto p-5 space-y-4">
+                <p
+                    id="helpEmpty"
+                    class="font-body-sm text-body-sm text-on-surface-variant"
+                    data-i18n="help.empty"
+                >
+                    Ask anything about routing, engines, endpoints, the handoff
+                    contract…
+                </p>
+            </div>
+            <div class="border-t border-outline-variant p-3 shrink-0">
+                <div class="flex items-end gap-2">
+                    <textarea
+                        id="helpInput"
+                        rows="1"
+                        class="fld flex-1 resize-none"
+                        data-i18n-ph="help.placeholder"
+                        placeholder="Ask a question…"
+                    ></textarea>
+                    <button
+                        id="helpSend"
+                        class="inline-flex items-center justify-center w-10 h-10 rounded-lg text-on-primary shrink-0 hover:brightness-110 transition-[filter] disabled:opacity-45"
+                        style="background: #8b8cff"
+                        data-i18n-title="help.send"
+                        title="Send"
+                    >
+                        <span class="material-symbols-outlined">send</span>
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <script>
+            const $ = (id) => document.getElementById(id);
+
+            /* ---------------- i18n ---------------- */
+            const I18N = {
+                en: {
+                    "nav.dashboard": "Dashboard",
+                    "nav.endpoints": "Endpoints",
+                    "nav.router": "Router",
+                    "nav.server": "Server",
+                    "nav.discussions": "Discussions",
+                    "title.dashboard": "Dashboard",
+                    "title.endpoints": "Model endpoints",
+                    "title.router": "Turn router",
+                    "title.server": "Server",
+                    "title.discussions": "Discussions",
+                    "status.label": "Status:",
+                    "status.running": "running",
+                    "status.stopped": "stopped",
+                    "btn.start": "Start",
+                    "btn.stop": "Stop",
+                    "ui.help": "Help",
+                    "ui.account": "Account",
+                    "help.title": "Chat",
+                    "help.close": "Close",
+                    "help.send": "Send",
+                    "help.tip":
+                        "This chat runs a RAG over a long document, so the model\nmust prefill that whole context before it can answer.\nWithout a GPU, the first reply can be extremely slow to start.",
+                    "help.empty":
+                        "Ask anything about routing, engines, endpoints, the handoff contract…",
+                    "help.placeholder": "Ask a question…",
+                    "help.error":
+                        "The help assistant is unavailable — is the planner running?",
+                    "dash.subtitle":
+                        "What's running and what still needs attention before you route traffic.",
+                    "dash.routing": "ROUTING",
+                    "dash.lastRoute": "last route",
+                    "dash.discussions": "discussions",
+                    "dash.endpoint": "endpoint",
+                    "dash.setup": "SETUP",
+                    "card.planner": "Planner",
+                    "card.coder": "Coder",
+                    "card.router": "Router",
+                    "card.server": "Server",
+                    "state.missing": "missing",
+                    "state.offline": "offline",
+                    "state.ready": "ready",
+                    "state.running": "running",
+                    "state.stopped": "stopped",
+                    "line.setUrlModel": "Set the base URL and model",
+                    "line.notResponding": "not responding",
+                    "line.slotsWarm": "slots warm",
+                    "line.setRouter": "Set the router model and URL",
+                    "line.routerNotResponding": "Router model not responding",
+                    "line.ruleDesc": "State + keywords, no model",
+                    "line.llmDesc": "Tiny model breaks ties",
+                    "line.serving": "Serving /v1 — routing live",
+                    "line.clickStart": "Click Start to arm the endpoint",
+                    "ep.subtitle":
+                        "Two resident llama-server backends. Slots is each server's -np value: the number of discussions it can keep warm at once.",
+                    "ep.plannerRole": "— reasoning, RAG, builds the plan",
+                    "ep.coderRole": "— executes one subtask, ends with FINISH",
+                    "ep.baseUrl": "Base URL",
+                    "ep.modelAlias": "Model alias",
+                    "ep.slots": "Parallel slots (-np)",
+                    "ep.save": "Save endpoints",
+                    "ep.note": "Slot counts apply when you next click Start.",
+                    "router.subtitle":
+                        "Decides per turn whether a message goes to the planner or the coder.",
+                    "router.mode": "Mode",
+                    "router.optRule": "rule — state + keywords (no model)",
+                    "router.optLlm": "llm — tiny model breaks ties",
+                    "router.modelAlias": "Router model alias",
+                    "router.baseUrl": "Router base URL (mode llm)",
+                    "router.save": "Save router",
+                    "router.modelTitle": "Router model (mode llm)",
+                    "router.useRec": "Use recommended",
+                    "router.recText":
+                        "The router only classifies each turn (planner vs coder), so a tiny instruct model is plenty. Recommended: Qwen3-0.6B on llama.cpp.",
+                    "server.subtitle":
+                        "The OpenAI-compatible endpoint and optional on-disk KV persistence. The database is created automatically.",
+                    "server.listen": "Listen address",
+                    "server.slotPath": "Slot save path (optional)",
+                    "server.slotPathPh":
+                        "empty = caches stay in hot slots only",
+                    "server.save": "Save server",
+                    "server.hint1": "Point your IDE's OpenAI base URL at ",
+                    "server.hint2": ", model ",
+                    "server.note1":
+                        "Slot save path must match each llama-server ",
+                    "server.note2":
+                        ". Changing the listen address needs a binary restart.",
+                    "disc.subtitle":
+                        "Each is an independent flow with its own per-role context and slot. Most recently used first.",
+                    "disc.id": "id",
+                    "disc.turns": "turns",
+                    "disc.lastUsed": "last used",
+                    "disc.empty":
+                        "No discussions yet. They appear once a client sends a request.",
+                    "toast.saved": "Saved",
+                    "toast.saveFailed": "Save failed",
+                    "toast.started": "Server started",
+                    "toast.startFailed": "Start failed",
+                    "toast.stopped": "Server stopped",
+                    "nav.engine": "Engine",
+                    "title.engine": "Engine",
+                    "state.loading": "loading",
+                    "eng.subtitle":
+                        "Choose an inference engine per role, point to the binary you installed, pick a model, and launch the planner and coder right here.",
+                    "eng.binTitle": "Engine binary",
+                    "eng.binLabel": "Binary path",
+                    "eng.engine": "Inference engine",
+                    "eng.search": "Find a model",
+                    "eng.modelTag": "Model / tag",
+                    "eng.findOn": "Find it on your machine:",
+                    "eng.guidePrefix": "New to inference engines?",
+                    "eng.guideLink":
+                        "Read a guide to the engines and how to install them",
+                    "eng.bareNote":
+                        "Heads up: this tab launches each engine with a minimal, portable command — no hardware tuning (GPU offload, KV-cache quantization, context size, tensor-parallel, slot persistence…). For best performance, run each engine as your own service or script tuned to your hardware and context, then just point the Endpoints tab at its base URL — you can skip this tab entirely.",
+                    "eng.binHelp":
+                        "Find it on your machine:\n• Windows (PowerShell):  Get-Command llama-server\n• Linux / macOS:  which llama-server",
+                    "eng.test": "Test",
+                    "eng.install": "Install llama.cpp",
+                    "eng.buildDocs": "build from source",
+                    "eng.plannerModel": "Planner model",
+                    "eng.coderModel": "Coder model",
+                    "eng.searchPh": "Search Hugging Face — e.g. qwen2.5 coder",
+                    "eng.repo": "Repository",
+                    "eng.file": "Quant file (.gguf)",
+                    "eng.launch": "Launch",
+                    "eng.stop": "Stop",
+                    "eng.autostart":
+                        "Auto-start everything when the server boots",
+                    "eng.autostartHint":
+                        "When enabled, starting naanollm-router also launches the planner and coder and arms /v1 once both are healthy.",
+                    "eng.save": "Save config",
+                    "eng.note":
+                        "Alias, port and parallel slots come from the Endpoints tab. The quant file is optional — leave it empty to let llama.cpp pick a default.",
+                    "eng.searching": "Searching…",
+                    "eng.noResults": "No GGUF models found",
+                    "eng.launching": "Launching…",
+                    "eng.launched":
+                        "Launched — downloading / loading the model…",
+                    "eng.launchFailed": "Launch failed",
+                    "eng.stopped": "Stopped",
+                    "eng.testing": "Testing…",
+                    "err.binMissing": "Binary path is not set for {role}.",
+                    "err.badPort":
+                        "Could not read a port from the base URL for {role}.",
+                    "err.noModel":
+                        "No model selected for {role} — pick one first.",
+                    "err.startFailed":
+                        "Could not start {role} — check the binary path.",
+                    "err.exited":
+                        "{role} exited immediately — check the binary and the engine logs.",
+                    "err.binEmpty": "Binary path is empty.",
+                    "err.unreachable": "The {role} endpoint is unreachable.",
+                },
+                fr: {
+                    "nav.dashboard": "Tableau de bord",
+                    "nav.endpoints": "Points d'accès",
+                    "nav.router": "Routeur",
+                    "nav.server": "Serveur",
+                    "nav.discussions": "Discussions",
+                    "title.dashboard": "Tableau de bord",
+                    "title.endpoints": "Points d'accès des modèles",
+                    "title.router": "Routeur de tour",
+                    "title.server": "Serveur",
+                    "title.discussions": "Discussions",
+                    "status.label": "Statut :",
+                    "status.running": "en marche",
+                    "status.stopped": "arrêté",
+                    "btn.start": "Démarrer",
+                    "btn.stop": "Arrêter",
+                    "ui.help": "Aide",
+                    "ui.account": "Compte",
+                    "help.title": "Discussion",
+                    "help.close": "Fermer",
+                    "help.send": "Envoyer",
+                    "help.tip":
+                        "Cette discussion s'appuie sur un RAG sur un long texte : le modèle\ndoit d'abord préamorcer (prefill) tout ce contexte avant de répondre.\nSans GPU, le démarrage de la réponse peut être extrêmement lent.",
+                    "help.empty":
+                        "Demandez ce que vous voulez : routage, moteurs, points d'accès, contrat de handoff…",
+                    "help.placeholder": "Posez une question…",
+                    "help.error":
+                        "L'assistant d'aide est indisponible — le planificateur tourne-t-il ?",
+                    "dash.subtitle":
+                        "Ce qui tourne et ce qui demande encore attention avant de router le trafic.",
+                    "dash.routing": "ROUTAGE",
+                    "dash.lastRoute": "dernier routage",
+                    "dash.discussions": "discussions",
+                    "dash.endpoint": "point d'accès",
+                    "dash.setup": "CONFIGURATION",
+                    "card.planner": "Planificateur",
+                    "card.coder": "Codeur",
+                    "card.router": "Routeur",
+                    "card.server": "Serveur",
+                    "state.missing": "manquant",
+                    "state.offline": "hors ligne",
+                    "state.ready": "prêt",
+                    "state.running": "en marche",
+                    "state.stopped": "arrêté",
+                    "line.setUrlModel": "Définissez l'URL de base et le modèle",
+                    "line.notResponding": "ne répond pas",
+                    "line.slotsWarm": "slots actifs",
+                    "line.setRouter":
+                        "Définissez le modèle et l'URL du routeur",
+                    "line.routerNotResponding":
+                        "Le modèle de routeur ne répond pas",
+                    "line.ruleDesc": "État + mots-clés, aucun modèle",
+                    "line.llmDesc": "Un petit modèle départage",
+                    "line.serving": "Sert /v1 — routage actif",
+                    "line.clickStart":
+                        "Cliquez sur Démarrer pour activer le point d'accès",
+                    "ep.subtitle":
+                        "Deux backends llama-server résidents. Slots correspond à la valeur -np de chaque serveur : le nombre de discussions qu'il peut garder actives à la fois.",
+                    "ep.plannerRole": "— raisonnement, RAG, construit le plan",
+                    "ep.coderRole":
+                        "— exécute une sous-tâche, termine par FINISH",
+                    "ep.baseUrl": "URL de base",
+                    "ep.modelAlias": "Alias du modèle",
+                    "ep.slots": "Slots parallèles (-np)",
+                    "ep.save": "Enregistrer les points d'accès",
+                    "ep.note":
+                        "Le nombre de slots s'applique au prochain Démarrer.",
+                    "router.subtitle":
+                        "Décide à chaque tour si un message va au planificateur ou au codeur.",
+                    "router.mode": "Mode",
+                    "router.optRule": "rule — état + mots-clés (aucun modèle)",
+                    "router.optLlm": "llm — un petit modèle départage",
+                    "router.modelAlias": "Alias du modèle de routeur",
+                    "router.baseUrl": "URL de base du routeur (mode llm)",
+                    "router.save": "Enregistrer le routeur",
+                    "router.modelTitle": "Modèle du routeur (mode llm)",
+                    "router.useRec": "Utiliser la recommandation",
+                    "router.recText":
+                        "Le routeur ne fait que classer chaque tour (planificateur ou codeur), donc un petit modèle instruct suffit largement. Recommandé : Qwen3-0.6B sur llama.cpp.",
+                    "server.subtitle":
+                        "Le point d'accès compatible OpenAI et la persistance KV optionnelle sur disque. La base de données est créée automatiquement.",
+                    "server.listen": "Adresse d'écoute",
+                    "server.slotPath":
+                        "Chemin de sauvegarde des slots (optionnel)",
+                    "server.slotPathPh":
+                        "vide = les caches restent uniquement dans les slots actifs",
+                    "server.save": "Enregistrer le serveur",
+                    "server.hint1":
+                        "Pointez l'URL de base OpenAI de votre IDE vers ",
+                    "server.hint2": ", modèle ",
+                    "server.note1":
+                        "Le chemin de sauvegarde des slots doit correspondre au ",
+                    "server.note2":
+                        " de chaque llama-server. Changer l'adresse d'écoute nécessite un redémarrage du binaire.",
+                    "disc.subtitle":
+                        "Chacune est un flux indépendant avec son propre contexte par rôle et son slot. Les plus récentes en premier.",
+                    "disc.id": "id",
+                    "disc.turns": "tours",
+                    "disc.lastUsed": "dernière utilisation",
+                    "disc.empty":
+                        "Aucune discussion pour l'instant. Elles apparaissent dès qu'un client envoie une requête.",
+                    "toast.saved": "Enregistré",
+                    "toast.saveFailed": "Échec de l'enregistrement",
+                    "toast.started": "Serveur démarré",
+                    "toast.startFailed": "Échec du démarrage",
+                    "toast.stopped": "Serveur arrêté",
+                    "nav.engine": "Moteur",
+                    "title.engine": "Moteur",
+                    "state.loading": "chargement",
+                    "eng.subtitle":
+                        "Choisissez un moteur d'inférence par rôle, indiquez le binaire que vous avez installé, choisissez un modèle, et lancez le planificateur et le codeur directement ici.",
+                    "eng.binTitle": "Binaire du moteur",
+                    "eng.binLabel": "Chemin du binaire",
+                    "eng.engine": "Moteur d'inférence",
+                    "eng.search": "Trouver un modèle",
+                    "eng.modelTag": "Modèle / tag",
+                    "eng.findOn": "Trouvez-le sur votre machine :",
+                    "eng.guidePrefix": "Nouveau sur les moteurs d'inférence ?",
+                    "eng.guideLink":
+                        "Lire un guide des moteurs et comment les installer",
+                    "eng.bareNote":
+                        "À savoir : cet onglet lance chaque moteur avec une commande minimale et portable — sans réglages matériels (offload GPU, quantification du cache KV, taille de contexte, tensor-parallel, persistance des slots…). Pour de meilleures performances, lancez chaque moteur via votre propre service ou script optimisé pour votre matériel et votre contexte, puis raccordez-le simplement depuis l'onglet Points d'accès via son URL de base — vous pouvez alors ignorer cet onglet.",
+                    "eng.binHelp":
+                        "Trouvez-le sur votre machine :\n• Windows (PowerShell) :  Get-Command llama-server\n• Linux / macOS :  which llama-server",
+                    "eng.test": "Tester",
+                    "eng.install": "Installer llama.cpp",
+                    "eng.buildDocs": "compiler depuis les sources",
+                    "eng.plannerModel": "Modèle du planificateur",
+                    "eng.coderModel": "Modèle du codeur",
+                    "eng.searchPh":
+                        "Rechercher sur Hugging Face — ex. qwen2.5 coder",
+                    "eng.repo": "Dépôt",
+                    "eng.file": "Fichier quant (.gguf)",
+                    "eng.launch": "Lancer",
+                    "eng.stop": "Arrêter",
+                    "eng.autostart":
+                        "Tout relancer automatiquement au démarrage du serveur",
+                    "eng.autostartHint":
+                        "Quand c'est activé, démarrer naanollm-router lance aussi le planificateur et le codeur et arme /v1 dès que les deux sont prêts.",
+                    "eng.save": "Enregistrer la config",
+                    "eng.note":
+                        "L'alias, le port et les slots parallèles proviennent de l'onglet Points d'accès. Le fichier quant est optionnel — laissez-le vide pour que llama.cpp choisisse par défaut.",
+                    "eng.searching": "Recherche…",
+                    "eng.noResults": "Aucun modèle GGUF trouvé",
+                    "eng.launching": "Lancement…",
+                    "eng.launched":
+                        "Lancé — téléchargement / chargement du modèle…",
+                    "eng.launchFailed": "Échec du lancement",
+                    "eng.stopped": "Arrêté",
+                    "eng.testing": "Test…",
+                    "err.binMissing":
+                        "Le chemin du binaire n'est pas défini pour {role}.",
+                    "err.badPort":
+                        "Impossible de lire un port depuis l'URL de base pour {role}.",
+                    "err.noModel":
+                        "Aucun modèle sélectionné pour {role} — choisissez-en un d'abord.",
+                    "err.startFailed":
+                        "Impossible de démarrer {role} — vérifiez le chemin du binaire.",
+                    "err.exited":
+                        "{role} s'est arrêté immédiatement — vérifiez le binaire et les logs du moteur.",
+                    "err.binEmpty": "Le chemin du binaire est vide.",
+                    "err.unreachable":
+                        "Le point d'accès {role} est injoignable.",
+                },
+            };
+
+            let LANG = "en";
+            let CFG = {};
+            function t(k) {
+                return I18N[LANG] && I18N[LANG][k] != null
+                    ? I18N[LANG][k]
+                    : I18N.en[k] != null
+                      ? I18N.en[k]
+                      : k;
+            }
+
+            function applyLang() {
+                document.documentElement.lang = LANG;
+                document.querySelectorAll("[data-i18n]").forEach((el) => {
+                    el.textContent = t(el.dataset.i18n);
+                });
+                document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+                    el.placeholder = t(el.dataset.i18nPh);
+                });
+                document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+                    el.title = t(el.dataset.i18nTitle);
+                });
+                document.querySelectorAll("[data-i18n-tip]").forEach((el) => {
+                    el.dataset.tip = t(el.dataset.i18nTip);
+                });
+                document
+                    .querySelectorAll(".langbtn")
+                    .forEach((b) =>
+                        b.classList.toggle("on", b.dataset.lang === LANG),
+                    );
+                const active = document.querySelector(".nav.active");
+                if (active)
+                    $("topTitle").textContent = t(
+                        "title." + active.dataset.sec,
+                    );
+                if (typeof applyEngineUI === "function") {
+                    applyEngineUI("P");
+                    applyEngineUI("C");
+                    applyEngineUI("R");
+                }
+                if (typeof updateRouterMode === "function") updateRouterMode();
+                updateBase();
+                refresh();
+            }
+            function setLang(l) {
+                LANG = l;
+                try {
+                    localStorage.setItem("llmrouter.lang", l);
+                } catch {}
+                applyLang();
+            }
+            document
+                .querySelectorAll(".langbtn")
+                .forEach((b) => (b.onclick = () => setLang(b.dataset.lang)));
+
+            /* ---------------- nav ---------------- */
+            document.querySelectorAll(".nav").forEach(
+                (n) =>
+                    (n.onclick = () => {
+                        document
+                            .querySelectorAll(".nav")
+                            .forEach((x) => x.classList.remove("active"));
+                        n.classList.add("active");
+                        const sec = n.dataset.sec;
+                        $("topTitle").textContent = t("title." + sec);
+                        document
+                            .querySelectorAll(".section")
+                            .forEach((s) =>
+                                s.classList.toggle(
+                                    "show",
+                                    s.dataset.sec === sec,
+                                ),
+                            );
+                        if (sec === "discussions") loadDiscussions();
+                    }),
+            );
+
+            /* ---------------- config <-> form ---------------- */
+            function toForm(c) {
+                $("addr").value = c.listen_addr || "";
+                $("slotPath").value = c.slot_save_path || "";
+                $("pBase").value = c.planner.base_url || "";
+                $("pModel").value = c.planner.model || "";
+                $("pSlots").value = c.planner.slots || 4;
+                $("cBase").value = c.coder.base_url || "";
+                $("cModel").value = c.coder.model || "";
+                $("cSlots").value = c.coder.slots || 4;
+                $("rMode").value = c.router.mode || "rule";
+                $("rModel").value = c.router.model || "";
+                $("rBase").value = c.router.base_url || "";
+                $("engineR").value = c.router.engine || "llamacpp";
+                $("binR").value = c.router.bin_path || "";
+                $("repoR").value = c.router.hf_repo || "";
+                $("fileR").value = c.router.hf_file || "";
+                $("autostart").checked = !!c.autostart;
+                $("engineP").value = c.planner.engine || "llamacpp";
+                $("binP").value = c.planner.bin_path || "";
+                $("repoP").value = c.planner.hf_repo || "";
+                $("fileP").value = c.planner.hf_file || "";
+                $("engineC").value = c.coder.engine || "llamacpp";
+                $("binC").value = c.coder.bin_path || "";
+                $("repoC").value = c.coder.hf_repo || "";
+                $("fileC").value = c.coder.hf_file || "";
+                updateBase();
+            }
+            function fromForm() {
+                const pm = CFG.planner || {},
+                    cm = CFG.coder || {},
+                    rm = CFG.router || {};
+                return {
+                    listen_addr: $("addr").value.trim(),
+                    slot_save_path: $("slotPath").value.trim(),
+                    llama_bin: CFG.llama_bin || "",
+                    autostart: $("autostart").checked,
+                    planner: {
+                        name: "planner",
+                        engine: $("engineP").value,
+                        bin_path: $("binP").value.trim(),
+                        base_url: $("pBase").value.trim(),
+                        model: $("pModel").value.trim(),
+                        slots: +$("pSlots").value,
+                        hf_repo: $("repoP").value.trim(),
+                        hf_file: $("fileP").value.trim(),
+                        model_path: pm.model_path || "",
+                        extra_args: pm.extra_args || "",
+                    },
+                    coder: {
+                        name: "coder",
+                        engine: $("engineC").value,
+                        bin_path: $("binC").value.trim(),
+                        base_url: $("cBase").value.trim(),
+                        model: $("cModel").value.trim(),
+                        slots: +$("cSlots").value,
+                        hf_repo: $("repoC").value.trim(),
+                        hf_file: $("fileC").value.trim(),
+                        model_path: cm.model_path || "",
+                        extra_args: cm.extra_args || "",
+                    },
+                    router: {
+                        mode: $("rMode").value,
+                        base_url: $("rBase").value.trim(),
+                        model: $("rModel").value.trim(),
+                        engine: $("engineR").value,
+                        bin_path: $("binR").value.trim(),
+                        hf_repo: $("repoR").value.trim(),
+                        hf_file: $("fileR").value.trim(),
+                        model_path: rm.model_path || "",
+                        extra_args: rm.extra_args || "",
+                        slots: rm.slots || 1,
+                    },
+                };
+            }
+            function updateBase() {
+                const a = $("addr").value.trim() || ":4000";
+                const port = a.startsWith(":")
+                    ? a.slice(1)
+                    : a.split(":").pop() || "4000";
+                $("baseUrl").textContent = `http://localhost:${port}/v1`;
+            }
+            function toast(el, msg, err) {
+                const tn = $(el);
+                tn.textContent = msg;
+                tn.className = "toast" + (err ? " err" : "");
+                setTimeout(() => {
+                    tn.textContent = "";
+                }, 3000);
+            }
+
+            /* localize backend errors: map {code, role, error} to a translated message */
+            const ERRKEY = {
+                bin_missing: "err.binMissing",
+                bad_port: "err.badPort",
+                no_model: "err.noModel",
+                start_failed: "err.startFailed",
+                exited: "err.exited",
+                bin_empty: "err.binEmpty",
+                unreachable: "err.unreachable",
+            };
+            function roleName(r) {
+                if (r === "router") return t("card.router");
+                if (r === "coder") return t("card.coder");
+                if (r === "planner") return t("card.planner");
+                return r || "";
+            }
+            function errMsg(e, fallbackKey) {
+                if (e && e.code && ERRKEY[e.code])
+                    return t(ERRKEY[e.code]).replace(
+                        "{role}",
+                        roleName(e.role),
+                    );
+                if (e && e.error) return e.error;
+                return fallbackKey ? t(fallbackKey) : "";
+            }
+
+            async function loadConfig() {
+                CFG = await (await fetch("/admin/config")).json();
+                toForm(CFG);
+            }
+            async function saveConfig(el) {
+                const r = await fetch("/admin/config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(fromForm()),
+                });
+                toast(
+                    el,
+                    r.ok ? t("toast.saved") : t("toast.saveFailed"),
+                    !r.ok,
+                );
+            }
+            async function startServer() {
+                await saveConfig("toast");
+                const r = await fetch("/admin/start", { method: "POST" });
+                if (r.ok) toast("toast", t("toast.started"));
+                else {
+                    const e = await r.json().catch(() => ({}));
+                    toast("toast", errMsg(e, "toast.startFailed"), true);
+                }
+                refresh();
+            }
+            async function stopServer() {
+                await fetch("/admin/stop", { method: "POST" });
+                toast("toast", t("toast.stopped"));
+                refresh();
+            }
+
+            /* ---------------- status ---------------- */
+            function setState(dotId, txtId, lineId, st) {
+                $(dotId).className = "dot " + st.cls;
+                $(txtId).textContent = st.label;
+                if (lineId) $(lineId).textContent = st.line;
+            }
+            function compState(c) {
+                if (!c.configured)
+                    return {
+                        cls: "warn",
+                        label: t("state.missing"),
+                        line: t("line.setUrlModel"),
+                    };
+                if (!c.reachable)
+                    return {
+                        cls: "bad",
+                        label: t("state.offline"),
+                        line:
+                            (c.base_url || "") + " " + t("line.notResponding"),
+                    };
+                return {
+                    cls: "ok",
+                    label: t("state.ready"),
+                    line: `${c.model} · ${c.slots_used}/${c.slots_size} ${t("line.slotsWarm")}`,
+                };
+            }
+            function renderBar(id, used, size) {
+                const el = $(id);
+                el.innerHTML = "";
+                for (let i = 0; i < Math.max(size, 1); i++) {
+                    const s = document.createElement("div");
+                    s.className = "seg" + (i < used ? " full" : "");
+                    el.appendChild(s);
+                }
+            }
+
+            async function refresh() {
+                let s;
+                try {
+                    s = await (await fetch("/admin/status")).json();
+                } catch {
+                    return;
+                }
+                $("pillDot").className = "dot " + (s.running ? "ok" : "warn");
+                $("pillTxt").textContent = s.running
+                    ? t("status.running")
+                    : t("status.stopped");
+                $("start").disabled = s.running;
+                $("stop").disabled = !s.running;
+
+                $("nodePlanner").classList.toggle(
+                    "on",
+                    s.last_route === "planner",
+                );
+                $("nodeCoder").classList.toggle("on", s.last_route === "coder");
+                $("vLast").textContent = s.last_route || "—";
+                $("vDisc").textContent = s.discussions;
+                $("navDisc").textContent = s.discussions;
+                $("vBase").textContent =
+                    (s.listen_addr || "").replace(/^:/, "localhost:") + "/v1";
+
+                setState(
+                    "dPlanner",
+                    "sPlanner",
+                    "lPlanner",
+                    compState(s.planner),
+                );
+                setState("dCoder", "sCoder", "lCoder", compState(s.coder));
+                renderBar(
+                    "barPlanner",
+                    s.planner.slots_used,
+                    s.planner.slots_size,
+                );
+                renderBar("barCoder", s.coder.slots_used, s.coder.slots_size);
+
+                const r = s.router;
+                setState(
+                    "dRouter",
+                    "sRouter",
+                    "lRouter",
+                    !r.configured
+                        ? {
+                              cls: "warn",
+                              label: t("state.missing"),
+                              line: t("line.setRouter"),
+                          }
+                        : !r.reachable
+                          ? {
+                                cls: "bad",
+                                label: t("state.offline"),
+                                line: t("line.routerNotResponding"),
+                            }
+                          : {
+                                cls: "ok",
+                                label: r.mode,
+                                line:
+                                    r.mode === "rule"
+                                        ? t("line.ruleDesc")
+                                        : t("line.llmDesc"),
+                            },
+                );
+                setState(
+                    "dServer",
+                    "sServer",
+                    "lServer",
+                    s.running
+                        ? {
+                              cls: "ok",
+                              label: t("state.running"),
+                              line: t("line.serving"),
+                          }
+                        : {
+                              cls: "warn",
+                              label: t("state.stopped"),
+                              line: t("line.clickStart"),
+                          },
+                );
+
+                setProc("P", s.planner);
+                setProc("C", s.coder);
+                setProc("R", s.router);
+            }
+
+            function setProc(suf, c) {
+                const dot = $("proc" + suf),
+                    txt = $("proc" + suf + "txt");
+                if (!dot || !txt) return;
+                if (c.process && c.reachable) {
+                    dot.className = "dot ok";
+                    txt.textContent = t("state.running");
+                } else if (c.process) {
+                    dot.className = "dot warn";
+                    txt.textContent = t("state.loading");
+                } else if (c.reachable) {
+                    dot.className = "dot ok";
+                    txt.textContent = t("state.ready");
+                } else {
+                    dot.className = "dot";
+                    txt.textContent = t("state.stopped");
+                }
+            }
+
+            async function loadDiscussions() {
+                let rows;
+                try {
+                    rows = await (await fetch("/admin/discussions")).json();
+                } catch {
+                    return;
+                }
+                const body = $("discBody");
+                body.innerHTML = "";
+                $("discEmpty").style.display =
+                    rows && rows.length ? "none" : "block";
+                const locale = LANG === "fr" ? "fr-FR" : "en-US";
+                (rows || []).forEach((d) => {
+                    const when = new Date(d.last_used * 1000).toLocaleString(
+                        locale,
+                    );
+                    const row = document.createElement("div");
+                    row.className =
+                        "grid grid-cols-3 gap-4 px-6 py-4 border-b border-outline-variant/60 font-mono text-body-sm text-on-surface";
+                    row.innerHTML = `<div>#${d.id}</div><div>${d.turns}</div><div class="text-on-surface-variant">${when}</div>`;
+                    body.appendChild(row);
+                });
+            }
+
+            $("save1").onclick = () => saveConfig("toast1");
+            $("save2").onclick = () => saveConfig("toast2");
+            $("save3").onclick = () => saveConfig("toast3");
+            $("start").onclick = startServer;
+            $("stop").onclick = stopServer;
+            $("addr").addEventListener("input", updateBase);
+
+            /* ---------------- engines: adapters, binary, HuggingFace, launch ---------------- */
+            const ENGINES = [
+                {
+                    id: "llamacpp",
+                    name: "llama.cpp",
+                    find: "llama-server",
+                    gguf: true,
+                    hf: true,
+                    install: "https://github.com/ggml-org/llama.cpp/releases",
+                    ph: {
+                        win: "C:\\\\tools\\\\llama.cpp\\\\llama-server.exe",
+                        nix: "/usr/local/bin/llama-server",
+                    },
+                },
+                {
+                    id: "vllm",
+                    name: "vLLM",
+                    find: "vllm",
+                    gguf: false,
+                    hf: true,
+                    install:
+                        "https://docs.vllm.ai/en/latest/getting_started/installation/",
+                    ph: {
+                        win: "C:\\\\path\\\\to\\\\Scripts\\\\vllm.exe",
+                        nix: "/path/to/venv/bin/vllm",
+                    },
+                },
+                {
+                    id: "sglang",
+                    name: "SGLang",
+                    find: "python",
+                    gguf: false,
+                    hf: true,
+                    note: "python -m sglang.launch_server",
+                    install: "https://docs.sglang.ai/get_started/install.html",
+                    ph: {
+                        win: "C:\\\\path\\\\to\\\\python.exe",
+                        nix: "/path/to/venv/bin/python",
+                    },
+                },
+                {
+                    id: "tgi",
+                    name: "Text Generation Inference",
+                    find: "text-generation-launcher",
+                    gguf: false,
+                    hf: true,
+                    install:
+                        "https://github.com/huggingface/text-generation-inference",
+                    ph: {
+                        win: "C:\\\\path\\\\to\\\\text-generation-launcher.exe",
+                        nix: "/usr/local/bin/text-generation-launcher",
+                    },
+                },
+                {
+                    id: "ollama",
+                    name: "Ollama",
+                    find: "ollama",
+                    gguf: false,
+                    hf: false,
+                    install: "https://ollama.com/download",
+                    ph: {
+                        win: "%LOCALAPPDATA%\\\\Programs\\\\Ollama\\\\ollama.exe",
+                        nix: "/usr/local/bin/ollama",
+                    },
+                },
+            ];
+            const ENG = Object.fromEntries(ENGINES.map((e) => [e.id, e]));
+            function osKey() {
+                const p = (
+                    (navigator.userAgentData &&
+                        navigator.userAgentData.platform) ||
+                    navigator.platform ||
+                    navigator.userAgent ||
+                    ""
+                ).toLowerCase();
+                if (p.includes("win")) return "win";
+                if (p.includes("mac") || p.includes("darwin")) return "mac";
+                return "linux";
+            }
+            function engMeta(suf) {
+                return ENG[$("engine" + suf).value] || ENGINES[0];
+            }
+            function fmtNum(n) {
+                n = +n || 0;
+                if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+                if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+                return "" + n;
+            }
+
+            function buildEngineSelects() {
+                ["P", "C", "R"].forEach((suf) => {
+                    const sel = $("engine" + suf);
+                    sel.innerHTML = "";
+                    ENGINES.forEach((e) => {
+                        const o = document.createElement("option");
+                        o.value = e.id;
+                        o.textContent = e.name;
+                        sel.appendChild(o);
+                    });
+                    sel.addEventListener("change", () => applyEngineUI(suf));
+                });
+            }
+            function applyEngineUI(suf) {
+                const m = engMeta(suf),
+                    isWin = osKey() === "win";
+                $("bin" + suf).placeholder = isWin ? m.ph.win : m.ph.nix;
+                $("binHelp" + suf).dataset.tip =
+                    t("eng.findOn") +
+                    "\n• Windows (PowerShell):  Get-Command " +
+                    m.find +
+                    "\n• Linux / macOS:  which " +
+                    m.find +
+                    (m.note ? "\n(" + m.note + ")" : "");
+                $("searchWrap" + suf).style.display = m.hf ? "" : "none";
+                $("fileWrap" + suf).style.display = m.gguf ? "" : "none";
+                $("repoLbl" + suf).textContent = m.hf
+                    ? t("eng.repo")
+                    : t("eng.modelTag");
+                $("repo" + suf).placeholder = m.hf
+                    ? m.gguf
+                        ? "unsloth/Qwen3.5-9B-GGUF"
+                        : "Qwen/Qwen2.5-Coder-7B-Instruct"
+                    : "qwen2.5-coder:7b";
+            }
+
+            async function saveAll() {
+                try {
+                    await fetch("/admin/config", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(fromForm()),
+                    });
+                    CFG = fromForm();
+                } catch {}
+            }
+
+            function setupPicker(suf, role) {
+                const q = $("hfq" + suf),
+                    res = $("hfres" + suf),
+                    repo = $("repo" + suf),
+                    file = $("file" + suf),
+                    dl = $("files" + suf);
+                let timer;
+                const hide = () => {
+                    res.classList.add("hidden");
+                    res.innerHTML = "";
+                };
+
+                async function loadFiles(rp) {
+                    dl.innerHTML = "";
+                    let files;
+                    try {
+                        files = await (
+                            await fetch(
+                                "/admin/hf/files?repo=" +
+                                    encodeURIComponent(rp),
+                            )
+                        ).json();
+                    } catch {
+                        files = [];
+                    }
+                    (files || []).forEach((f) => {
+                        const o = document.createElement("option");
+                        o.value = f;
+                        dl.appendChild(o);
+                    });
+                    if (!file.value && files && files.length) {
+                        file.value =
+                            files.find((f) => /q4_k_m/i.test(f)) ||
+                            files.find((f) => /q4/i.test(f)) ||
+                            files[0];
+                    }
+                }
+                async function search() {
+                    const term = q.value.trim();
+                    if (!term) {
+                        hide();
+                        return;
+                    }
+                    const gguf = engMeta(suf).gguf ? "&gguf=1" : "";
+                    res.classList.remove("hidden");
+                    res.innerHTML =
+                        '<div class="px-4 py-3 font-body-sm text-on-surface-variant">' +
+                        t("eng.searching") +
+                        "</div>";
+                    let rows;
+                    try {
+                        rows = await (
+                            await fetch(
+                                "/admin/hf/search?q=" +
+                                    encodeURIComponent(term) +
+                                    gguf,
+                            )
+                        ).json();
+                    } catch {
+                        rows = [];
+                    }
+                    if (!rows || !rows.length) {
+                        res.innerHTML =
+                            '<div class="px-4 py-3 font-body-sm text-on-surface-variant">' +
+                            t("eng.noResults") +
+                            "</div>";
+                        return;
+                    }
+                    res.innerHTML = "";
+                    rows.slice(0, 15).forEach((m) => {
+                        const d = document.createElement("div");
+                        d.className =
+                            "px-4 py-2.5 cursor-pointer hover:bg-surface-variant border-b border-outline-variant/40 flex items-center justify-between gap-3";
+                        const id = document.createElement("span");
+                        id.className =
+                            "font-mono text-body-sm text-on-surface truncate";
+                        id.textContent = m.id;
+                        const dn = document.createElement("span");
+                        dn.className =
+                            "font-body-sm text-on-surface-variant shrink-0";
+                        dn.textContent = "↓ " + fmtNum(m.downloads);
+                        d.appendChild(id);
+                        d.appendChild(dn);
+                        d.onclick = () => {
+                            repo.value = m.id;
+                            file.value = "";
+                            hide();
+                            if (engMeta(suf).gguf) loadFiles(m.id);
+                        };
+                        res.appendChild(d);
+                    });
+                }
+                q.addEventListener("input", () => {
+                    clearTimeout(timer);
+                    timer = setTimeout(search, 350);
+                });
+                q.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        clearTimeout(timer);
+                        search();
+                    }
+                });
+                repo.addEventListener("change", () => {
+                    if (engMeta(suf).gguf && repo.value.trim())
+                        loadFiles(repo.value.trim());
+                });
+                document.addEventListener("click", (e) => {
+                    if (!res.contains(e.target) && e.target !== q) hide();
+                });
+
+                $("test" + suf).onclick = async () => {
+                    const tn = $("binRes" + suf);
+                    tn.className = "toast";
+                    tn.textContent = t("eng.testing");
+                    let r;
+                    try {
+                        r = await fetch("/admin/engine/test", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                bin: $("bin" + suf).value.trim(),
+                            }),
+                        });
+                    } catch {
+                        tn.className = "toast err";
+                        tn.textContent = t("eng.launchFailed");
+                        return;
+                    }
+                    if (r.ok) {
+                        const d = await r.json();
+                        tn.className = "toast";
+                        tn.textContent = "✓ " + (d.version || "ok");
+                    } else {
+                        const e = await r.json().catch(() => ({}));
+                        tn.className = "toast err";
+                        tn.textContent = "✗ " + errMsg(e, "eng.launchFailed");
+                    }
+                };
+                $("launch" + suf).onclick = () => launchRole(role, suf);
+                $("stop" + suf).onclick = () => stopRole(role, suf);
+            }
+
+            async function launchRole(role, suf) {
+                const tn = $("launch" + suf + "toast");
+                tn.className = "toast";
+                tn.textContent = t("eng.launching");
+                await saveAll();
+                let r;
+                try {
+                    r = await fetch("/admin/engine/launch", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ role }),
+                    });
+                } catch {
+                    tn.className = "toast err";
+                    tn.textContent = t("eng.launchFailed");
+                    return;
+                }
+                if (r.ok) {
+                    tn.className = "toast";
+                    tn.textContent = t("eng.launched");
+                } else {
+                    const e = await r.json().catch(() => ({}));
+                    tn.className = "toast err";
+                    tn.textContent = errMsg(e, "eng.launchFailed");
+                }
+                setTimeout(() => {
+                    tn.textContent = "";
+                }, 6000);
+                refresh();
+            }
+            async function stopRole(role, suf) {
+                try {
+                    await fetch("/admin/engine/stop", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ role }),
+                    });
+                } catch {}
+                const tn = $("launch" + suf + "toast");
+                tn.className = "toast";
+                tn.textContent = t("eng.stopped");
+                setTimeout(() => {
+                    tn.textContent = "";
+                }, 3000);
+                refresh();
+            }
+
+            $("saveEngine").onclick = () => saveConfig("engineToast");
+            buildEngineSelects();
+            setupPicker("P", "planner");
+            setupPicker("C", "coder");
+            setupPicker("R", "router");
+
+            function updateRouterMode() {
+                const el = $("routerManaged");
+                if (el)
+                    el.style.display = $("rMode").value === "llm" ? "" : "none";
+            }
+            $("rMode").addEventListener("change", updateRouterMode);
+            $("useRecRouter").onclick = () => {
+                $("engineR").value = "llamacpp";
+                $("rModel").value = "qwen3-0.6b";
+                $("repoR").value = "unsloth/Qwen3-0.6B-GGUF";
+                $("fileR").value = "Qwen3-0.6B-Q4_K_M.gguf";
+                applyEngineUI("R");
+            };
+
+            /* ---------------- help chat (streams from the planner) ---------------- */
+            let helpMsgs = [];
+            let helpBusy = false;
+            function openHelp() {
+                $("helpPanel").classList.add("open");
+                $("helpBackdrop").classList.remove("hidden");
+                setTimeout(() => $("helpInput").focus(), 50);
+            }
+            function closeHelp() {
+                $("helpPanel").classList.remove("open");
+                $("helpBackdrop").classList.add("hidden");
+            }
+            function scrollHelp() {
+                const b = $("helpMessages");
+                b.scrollTop = b.scrollHeight;
+            }
+            function renderHelp() {
+                const box = $("helpMessages");
+                $("helpEmpty").style.display = helpMsgs.length ? "none" : "";
+                Array.from(box.querySelectorAll(".hbubble")).forEach((n) =>
+                    n.remove(),
+                );
+                helpMsgs.forEach((m, idx) => {
+                    const wrap = document.createElement("div");
+                    wrap.className =
+                        "hbubble flex " +
+                        (m.role === "user" ? "justify-end" : "justify-start");
+                    const b = document.createElement("div");
+                    b.className =
+                        "max-w-[85%] rounded-xl px-3 py-2 font-body-sm text-body-sm whitespace-pre-wrap " +
+                        (m.role === "user"
+                            ? "bg-secondary-container text-on-secondary-container"
+                            : "bg-surface-container-high text-on-surface");
+                    b.textContent = m.content || "…";
+                    if (m.role === "assistant" && idx === helpMsgs.length - 1)
+                        b.setAttribute("data-last", "");
+                    wrap.appendChild(b);
+                    box.appendChild(wrap);
+                });
+                scrollHelp();
+            }
+            async function helpSendMsg() {
+                const v = $("helpInput").value.trim();
+                if (!v || helpBusy) return;
+                helpBusy = true;
+                $("helpSend").disabled = true;
+                helpMsgs.push({ role: "user", content: v });
+                $("helpInput").value = "";
+                const a = { role: "assistant", content: "" };
+                helpMsgs.push(a);
+                renderHelp();
+                const bubble = $("helpMessages").querySelector("[data-last]");
+                try {
+                    const resp = await fetch("/admin/help/chat", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            messages: helpMsgs.slice(0, -1),
+                        }),
+                    });
+                    if (!resp.ok || !resp.body) {
+                        const e = await resp.json().catch(() => ({}));
+                        a.content = errMsg(e, "help.error");
+                        renderHelp();
+                    } else {
+                        const reader = resp.body.getReader(),
+                            dec = new TextDecoder();
+                        let buf = "";
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            buf += dec.decode(value, { stream: true });
+                            let i;
+                            while ((i = buf.indexOf("\n")) >= 0) {
+                                const line = buf.slice(0, i).trim();
+                                buf = buf.slice(i + 1);
+                                if (!line.startsWith("data:")) continue;
+                                const d = line.slice(5).trim();
+                                if (d === "" || d === "[DONE]") continue;
+                                try {
+                                    const j = JSON.parse(d);
+                                    const tk =
+                                        j.choices &&
+                                        j.choices[0] &&
+                                        j.choices[0].delta &&
+                                        j.choices[0].delta.content;
+                                    if (tk) {
+                                        a.content += tk;
+                                        if (bubble)
+                                            bubble.textContent = a.content;
+                                        scrollHelp();
+                                    }
+                                } catch {}
+                            }
+                        }
+                        if (!a.content) {
+                            a.content = t("help.error");
+                            if (bubble) bubble.textContent = a.content;
+                        }
+                    }
+                } catch {
+                    a.content = t("help.error");
+                    renderHelp();
+                }
+                helpBusy = false;
+                $("helpSend").disabled = false;
+            }
+            $("helpBtn").onclick = (e) => {
+                e.preventDefault();
+                openHelp();
+            };
+            $("helpClose").onclick = closeHelp;
+            $("helpBackdrop").onclick = closeHelp;
+            $("helpSend").onclick = helpSendMsg;
+            $("helpInput").addEventListener("keydown", (e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    helpSendMsg();
+                }
+            });
+
+            /* ---------------- init ---------------- */
+            try {
+                const saved = localStorage.getItem("llmrouter.lang");
+                if (saved === "en" || saved === "fr") LANG = saved;
+                else if (
+                    (navigator.language || "").toLowerCase().startsWith("fr")
+                )
+                    LANG = "fr";
+            } catch {}
+
+            loadConfig().then(applyLang);
+            setInterval(refresh, 2500);
+        </script>
+    </body>
+</html>
