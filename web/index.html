@@ -263,13 +263,17 @@
                 color: #fff;
                 border-color: #8b8cff;
                 background: rgba(139, 140, 255, 0.12);
-                box-shadow: 0 0 0 1px #8b8cff inset;
+                box-shadow:
+                    0 0 0 1px #8b8cff inset,
+                    0 0 22px -2px rgba(139, 140, 255, 0.6);
             }
             .node.on[data-role="coder"] {
                 color: #fff;
                 border-color: #2dd4bf;
                 background: rgba(45, 212, 191, 0.12);
-                box-shadow: 0 0 0 1px #2dd4bf inset;
+                box-shadow:
+                    0 0 0 1px #2dd4bf inset,
+                    0 0 22px -2px rgba(45, 212, 191, 0.6);
             }
             @media (prefers-reduced-motion: no-preference) {
                 .node.on {
@@ -286,49 +290,159 @@
                 }
             }
 
-            /* routing wire: planner -> coder, animated while the coder works */
-            .wire {
+            /* routing conduit: an energy beam planner -> coder.
+               Idle = a calm, STATIC beam. All motion (waves, running pulse,
+               breathing tips) is gated behind `.flow`, which the dashboard adds
+               only while the coder has an active slot — so motion means the
+               coder is executing, as specified. */
+            .conduit-wrap {
                 position: relative;
                 flex: 1 1 auto;
-                height: 2px;
-                margin: 0 1rem;
-                background: #45464d;
-                border-radius: 2px;
+                min-width: 0;
+                margin: 0 0.85rem;
+            }
+            .conduit {
+                display: block;
+                width: 100%;
+                height: 60px;
+                /* clip the off-viewport half of the looping waves (x 600..1200)
+                   to the SVG viewport — the SVG UA default that `overflow:
+                   visible` would disable, letting the waves bleed across the
+                   page. The round end tips live outside the SVG, so they keep
+                   their glow. */
                 overflow: hidden;
             }
-            .wire::after {
-                content: "";
-                position: absolute;
-                inset: 0;
+            .conduit .rwBase {
+                stroke: #2a3548;
+                stroke-width: 2;
+            }
+            /* idle: a dim, static beam; waves + pulse hidden, tips quiet */
+            .conduit .rwGlowBeam {
+                stroke: url(#rwGrad);
+                stroke-width: 8;
                 opacity: 0;
-                background: linear-gradient(
-                    90deg,
-                    transparent 0%,
-                    #2dd4bf 50%,
-                    transparent 100%
-                );
-                background-size: 45% 100%;
-                background-repeat: no-repeat;
-                background-position: -45% 0;
-                transition: opacity 0.3s;
+                filter: url(#rwGlow);
+                transition: opacity 0.45s;
+            }
+            .conduit .rwCore {
+                stroke: url(#rwGrad);
+                stroke-width: 2.4;
+                stroke-linecap: round;
+                opacity: 0.32;
+                transition: opacity 0.45s;
+            }
+            .conduit .rwWave {
+                fill: none;
+                stroke: url(#rwGrad);
+                stroke-width: 1.5;
+                stroke-linecap: round;
+                opacity: 0;
+                transition: opacity 0.45s;
+            }
+            .conduit .rwWave2 {
+                stroke-width: 1.1;
+            }
+            .conduit .rwPulse {
+                fill: none;
+                stroke: #e7fbff;
+                stroke-width: 2.6;
+                stroke-linecap: round;
+                opacity: 0;
+                stroke-dasharray: 24 576;
+                filter: url(#rwGlow);
+                transition: opacity 0.45s;
+            }
+            /* round, glowing end tips pinned to the beam ends */
+            .rwTip {
+                position: absolute;
+                top: 50%;
+                width: 11px;
+                height: 11px;
+                border-radius: 50%;
+                transform: translate(-50%, -50%);
+                opacity: 0.45;
+                transition: opacity 0.45s;
+            }
+            .rwTipP {
+                left: 0;
+                color: #8b8cff;
+                background: #8b8cff;
+                box-shadow: 0 0 12px 2px rgba(139, 140, 255, 0.85);
+            }
+            .rwTipC {
+                right: 0;
+                left: auto;
+                transform: translate(50%, -50%);
+                color: #2dd4bf;
+                background: #2dd4bf;
+                box-shadow: 0 0 12px 2px rgba(45, 212, 191, 0.85);
+            }
+
+            /* coder in action: the beam comes alive (brightness + motion) */
+            .conduit.flow .rwGlowBeam {
+                opacity: 0.5;
+            }
+            .conduit.flow .rwCore {
+                opacity: 1;
+            }
+            .conduit.flow .rwWave {
+                opacity: 0.5;
+            }
+            .conduit.flow .rwWave2 {
+                opacity: 0.28;
+            }
+            .conduit.flow .rwPulse {
+                opacity: 0.9;
+            }
+            .conduit.flow .rwPulse2 {
+                opacity: 0.55;
+            }
+            .conduit.flow .rwTip {
+                opacity: 1;
             }
             @media (prefers-reduced-motion: no-preference) {
-                .wire.flow::after {
-                    opacity: 1;
-                    animation: wireflow 1s linear infinite;
+                /* motion runs ONLY while the coder is executing */
+                .conduit.flow .rwRipples {
+                    transform-box: fill-box;
+                    animation: rwflow 2.2s linear infinite;
                 }
-                @keyframes wireflow {
-                    0% {
-                        background-position: -45% 0;
+                @keyframes rwflow {
+                    from {
+                        transform: translateX(-50%);
                     }
+                    to {
+                        transform: translateX(0);
+                    }
+                }
+                .conduit.flow .rwPulse {
+                    animation: rwdash 1.7s linear infinite;
+                }
+                .conduit.flow .rwPulse2 {
+                    animation-delay: 0.85s;
+                }
+                @keyframes rwdash {
+                    from {
+                        stroke-dashoffset: 600;
+                    }
+                    to {
+                        stroke-dashoffset: 0;
+                    }
+                }
+                .conduit.flow .rwTip {
+                    animation: rwbreathe 2.4s ease-in-out infinite;
+                }
+                .conduit.flow .rwTipC {
+                    animation-delay: 1.2s;
+                }
+                @keyframes rwbreathe {
+                    0%,
                     100% {
-                        background-position: 145% 0;
+                        opacity: 0.8;
                     }
-                }
-            }
-            @media (prefers-reduced-motion: reduce) {
-                .wire.flow {
-                    background: #2dd4bf;
+                    50% {
+                        opacity: 1;
+                        box-shadow: 0 0 16px 4px currentColor;
+                    }
                 }
             }
 
@@ -611,7 +725,105 @@
                                 >
                                     PLANNER
                                 </div>
-                                <div class="wire" id="routeWire"></div>
+                                <div class="conduit-wrap">
+                                    <svg
+                                        class="conduit"
+                                        id="routeWire"
+                                        viewBox="0 0 600 60"
+                                        preserveAspectRatio="none"
+                                        aria-hidden="true"
+                                    >
+                                        <defs>
+                                            <linearGradient
+                                                id="rwGrad"
+                                                x1="0"
+                                                y1="0"
+                                                x2="1"
+                                                y2="0"
+                                            >
+                                                <stop
+                                                    offset="0%"
+                                                    stop-color="#8b8cff"
+                                                />
+                                                <stop
+                                                    offset="55%"
+                                                    stop-color="#6ee7ff"
+                                                />
+                                                <stop
+                                                    offset="100%"
+                                                    stop-color="#2dd4bf"
+                                                />
+                                            </linearGradient>
+                                            <filter
+                                                id="rwGlow"
+                                                x="-20%"
+                                                y="-120%"
+                                                width="140%"
+                                                height="340%"
+                                            >
+                                                <feGaussianBlur
+                                                    stdDeviation="3.2"
+                                                    result="b"
+                                                />
+                                                <feMerge>
+                                                    <feMergeNode in="b" />
+                                                    <feMergeNode
+                                                        in="SourceGraphic"
+                                                    />
+                                                </feMerge>
+                                            </filter>
+                                        </defs>
+                                        <line
+                                            class="rwBase"
+                                            x1="0"
+                                            y1="30"
+                                            x2="600"
+                                            y2="30"
+                                        />
+                                        <line
+                                            class="rwGlowBeam"
+                                            x1="0"
+                                            y1="30"
+                                            x2="600"
+                                            y2="30"
+                                        />
+                                        <line
+                                            class="rwCore"
+                                            x1="0"
+                                            y1="30"
+                                            x2="600"
+                                            y2="30"
+                                        />
+                                        <g class="rwRipples">
+                                            <path
+                                                class="rwWave rwWave1"
+                                                d="M0 30 Q37.5 24 75 30 T150 30 T225 30 T300 30 T375 30 T450 30 T525 30 T600 30 T675 30 T750 30 T825 30 T900 30 T975 30 T1050 30 T1125 30 T1200 30"
+                                            />
+                                            <path
+                                                class="rwWave rwWave2"
+                                                d="M0 30 Q37.5 34 75 30 T150 30 T225 30 T300 30 T375 30 T450 30 T525 30 T600 30 T675 30 T750 30 T825 30 T900 30 T975 30 T1050 30 T1125 30 T1200 30"
+                                            />
+                                        </g>
+                                        <line
+                                            class="rwPulse rwPulse1"
+                                            x1="0"
+                                            y1="30"
+                                            x2="600"
+                                            y2="30"
+                                            pathLength="600"
+                                        />
+                                        <line
+                                            class="rwPulse rwPulse2"
+                                            x1="0"
+                                            y1="30"
+                                            x2="600"
+                                            y2="30"
+                                            pathLength="600"
+                                        />
+                                    </svg>
+                                    <span class="rwTip rwTipP"></span>
+                                    <span class="rwTip rwTipC"></span>
+                                </div>
                                 <div
                                     class="node"
                                     data-role="coder"
