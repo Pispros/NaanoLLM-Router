@@ -34,6 +34,7 @@ func (a *Admin) Register(mux *http.ServeMux) {
 		mux.Handle("/tailwind.css", fileServer)
 		mux.Handle("/fonts.css", fileServer)
 		mux.Handle("/fonts/", fileServer)
+		mux.Handle("/images/", fileServer)
 	}
 
 	mux.HandleFunc("/admin/config", a.config)
