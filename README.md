@@ -50,6 +50,9 @@ back each prior assistant message verbatim. So identity is anchored there:
 - The first turn (no assistant messages yet) is de-duplicated on a normalized
   first-user-message anchor (so a retried first turn reuses the same discussion),
   otherwise a new discussion is created.
+- When the client sends a stable `prompt_cache_key` (Zed mints a fixed UUID per
+  thread), it is used as the primary discussion key — the most reliable signal of
+  all, since it is content-free and collision-free.
 
 Because tool_calls are part of the fingerprint, this works for agentic clients
 whose turns are pure tool calls with little or no text (Cline, Roo Code, JetBrains
@@ -60,6 +63,69 @@ harmless.
 Turns are persisted **synchronously** at the end of each request, so turn *N* is
 on record before turn *N+1* arrives to be matched against it.
 
+## Turn routing: one model decides, every turn
+
+There is exactly **one routing brain: a tiny GBNF-constrained instruct model**
+that classifies every turn as `planner` or `coder`. There is no "rule vs llm"
+mode to choose — the model always routes. Keyword rules exist only as an
+emergency fallback (see below).
+
+On each genuine user turn the router asks the tiny model for a single word,
+giving it three signals:
+
+- `pending_plan` — whether an approved plan is waiting to be executed.
+- `last_assistant` — a bounded (≤400-char) tail of the previous assistant
+  message, so it can tell "the planner just proposed a plan, now run it" from a
+  fresh request.
+- the current user message.
+
+A GBNF grammar (`root ::= "planner" | "coder"`) makes it physically unable to
+answer anything else, and the reply is parsed leniently (case-insensitive, tolerant
+of a stray `<think>…</think>` preamble).
+
+Three guards keep the decision coherent — none of them inspect user keywords;
+they encode structural facts about how planner and coder relate:
+
+1. **An explicit model alias wins.** If the caller asks for `planner` or `coder`
+   directly (e.g. Cline/Roo Plan/Act mapped to a role), that is honored as-is.
+2. **No pending plan ⇒ planner only.** The coder exists *only* to execute an
+   existing plan; with no plan there is nothing to execute, so `coder` is not a
+   valid answer. In that case the grammar is restricted to `planner` alone. The
+   model still makes the real planner/coder choice whenever a plan is pending.
+3. **Tool-loop continuations stay on the coder.** Within one agentic turn an IDE
+   sends *many* requests — one per tool round — feeding tool results back for the
+   model to continue. Re-classifying each round would oscillate between coder and
+   planner and loop forever (the planner, which has its tools stripped, would
+   re-emit the plan mid-execution). So a request that is a continuation (a tool
+   result, or an assistant `tool_calls`, appearing after the newest user message)
+   is **not** re-routed: only the coder has tools, so a continuation always belongs
+   to the coder finishing its work. The model is consulted **once per real user
+   turn**, not on every micro-round.
+
+The planner has its `tools`/`tool_choice` stripped so a weak model can't wander
+off calling tools instead of producing the plan; the coder keeps its full tool
+set. Per-role sampling is forced too (planner near-deterministic at
+`temperature 0`, coder at `0.15`).
+
+### Fallback (only when the model can't answer)
+
+If the router model is unreachable, times out, errors, or returns something that
+isn't a role, the router falls back to a minimal keyword rule: *pending plan + an
+execute-style message → coder, otherwise planner* (never mutate files on a guess).
+This is **not** a configurable mode — it is a safety net, and it is made visible:
+
+- the response carries `X-LLMRouter-Fallback: 1`,
+- `/admin/status` reports `last_route_fallback: true`,
+- the dashboard **Router** card flips from green *“Model routing every turn”* to an
+  amber *“Model unavailable — using keyword fallback”*,
+- a `WARN … used keyword fallback` line is logged.
+
+> **The router model must be a generative instruct model**, not an embedding
+> model. An embedding model (e.g. `Qwen3-Embedding-0.6B`) can't follow the
+> "answer planner or coder" instruction and every turn silently degrades to the
+> fallback. Use the generative `Qwen3-0.6B` (the **Use recommended** button fills
+> it in).
+
 ## Architecture
 
 ```
@@ -67,8 +133,10 @@ IDE (base_url -> :4000/v1, model=auto)
         │
         ▼
   llmrouter (this binary)
-    • resolve discussion by assistant-transcript match (text + tool_calls)
-    • route turn: state rule (+ optional tiny GBNF model) -> planner | coder
+    • resolve discussion (prompt_cache_key, else assistant-transcript match)
+    • route turn: tiny GBNF model classifies planner|coder every turn
+        (explicit alias wins · no plan ⇒ planner · tool-continuation ⇒ coder
+         · keyword fallback only if the model fails)
     • build append-only prompt: [system+contract] + [per-role history] + [new input]
     • pin the role's warm slot (id_slot), cache_prompt:true
     • stream straight through (tool_calls relayed verbatim)
@@ -78,6 +146,9 @@ IDE (base_url -> :4000/v1, model=auto)
   llama-server (planner)     llama-server (coder)
    -np N : one slot per        -np N : one slot per
    active discussion           active discussion
+            ▲
+            │  tiny router model (GBNF), consulted once per real user turn
+        llama-server (router)
 ```
 
 Append-only discipline keeps each model's prefix stable, so llama.cpp reuses the
@@ -85,13 +156,13 @@ warm KV and only re-prefills the small new suffix.
 
 ## Parallel discussions
 
-Every conversation (identified by its assistant transcript, see above) is an
-independent flow with its own per-role context in SQLite. At runtime, llmrouter
-spreads each upstream's `-np N` slots across the active discussions: one slot per
-(role, discussion). When more discussions are active than there are slots, the
-least-recently-used one is evicted — its KV parked to a `.bin` if a slot save
-path is set, otherwise simply rebuilt from SQLite text on its next turn. Set
-`Slots` (the `-np` value) to how many discussions you want warm at once.
+Every conversation (identified as above) is an independent flow with its own
+per-role context in SQLite. At runtime, llmrouter spreads each upstream's `-np N`
+slots across the active discussions: one slot per (role, discussion). When more
+discussions are active than there are slots, the least-recently-used one is
+evicted — its KV parked to a `.bin` if a slot save path is set, otherwise simply
+rebuilt from SQLite text on its next turn. Set `Slots` (the `-np` value) to how
+many discussions you want warm at once.
 
 ## Build
 
@@ -111,6 +182,9 @@ startup (the discussions table is rebuilt to the transcript-based shape and a
 per-turn fingerprint column is added); no manual step and no data loss. Rows
 created before the upgrade have no fingerprints, so their conversations start a
 fresh discussion on their next turn — expected, and harmless.
+
+> Upgrading from a build that had a `router.mode` field? It is simply ignored now
+> (there is no mode), so your existing `llmrouter.json` keeps working untouched.
 
 ### If `go` tries to download a newer toolchain
 
@@ -134,7 +208,7 @@ that drops the external dependency entirely (stdlib-only binary).
 
 You don't have to start the backends by hand. naanollm-router can launch and
 supervise an inference server per role from the **Engine** tab. Each role
-(planner, coder) independently picks one of five engines:
+(planner, coder, router) independently picks one of five engines:
 
 | Engine | Binary you point to | Models |
 |--------|---------------------|--------|
@@ -158,24 +232,24 @@ Workflow per role:
 3. Click **Launch**. Alias, port and parallel slots come from the **Endpoints**
    tab.
 4. Tick **Auto-start everything when the server boots** and **Save config** to
-   relaunch both roles and arm `/v1` automatically next time.
+   relaunch every role and arm `/v1` automatically next time.
 
 Only llama.cpp gets per-discussion KV slot pinning (`id_slot`/`cache_prompt`);
 the other engines batch internally, so naanollm-router skips those fields for
 them automatically. Managed processes are stopped on Ctrl-C / SIGTERM.
 
-When the router is set to **llm** mode (Router tab), you can also load a custom
-router model with the same engine picker, and launch it from there. The router
-only classifies each turn (planner vs coder), so a tiny instruct model is
-plenty — the **Use recommended** button pre-fills Qwen3-0.6B on llama.cpp. With
-autostart on, the router model is launched at boot too.
+The **router model** is loaded with the same engine picker on the **Router** tab.
+It classifies every turn, so a tiny instruct model is plenty — the **Use
+recommended** button pre-fills `Qwen3-0.6B` on llama.cpp. (Make sure it's the
+generative model, not `Qwen3-Embedding-0.6B`.) With autostart on, the router
+model is launched at boot alongside planner and coder.
 
 The manual `llama-server` invocations below still work if you prefer to run the
 backends yourself — the Engine tab is optional.
 
-## Run the two models (llama-server)
+## Run the three models (llama-server)
 
-Keep both resident so switching is instant. Dedicate a slot per process and
+Keep them resident so switching is instant. Dedicate a slot per process and
 enable slot persistence if you want caches to survive a reload.
 
 Planner — Qwen3.5-9B (hybrid/SWA, so add `--swa-full` for correct slot restore):
@@ -199,28 +273,32 @@ llama-server -m qwen2.5-coder-7b-Q4_K_M.gguf \
   --jinja --port 8081
 ```
 
-Optional tiny router model (only used when `router.mode = llm`):
+Router — tiny **generative** instruct model (required; it routes every turn):
 
 ```bash
-llama-server -m qwen3-0.6b-Q4_K_M.gguf --alias qwen3-0.6b -ngl 99 --port 8082
+llama-server -m Qwen3-0.6B-Q4_K_M.gguf --alias qwen3-0.6b -ngl 99 --port 8082
 ```
 
-If both models fit in VRAM together (e.g. ~10.5 GB of weights in 16 GB), you can
-instead run them under `llama-swap` and give each a different alias; `llmrouter`
-selects by base URL/model regardless.
+The router stays light: it sees a short prompt and is capped at a few output
+tokens under a one-word grammar, so a 0.6B keeps routing near-instant. If real
+decision points (a pending plan, where planner vs coder is a genuine choice)
+misclassify, step up to a 1B–3B instruct — it's a pure config change (point the
+Router model/URL at the bigger model and relaunch); no code change.
+
+If all three fit in VRAM together you can instead run them under `llama-swap`
+with distinct aliases; `llmrouter` selects by base URL/model regardless.
 
 ## Configure & start
 
 Open the control panel at `http://localhost:4000/`:
 
-1. Set the planner and coder base URLs, model aliases, and slot counts (`-np`).
-2. Pick router mode (`rule` is enough for most cases; `llm` adds a tie-breaker).
-3. Optionally set a slot save path (must match each llama-server `--slot-save-path`).
-4. Click **Save endpoints**, then **Start server**. Start health-checks both
-   upstreams before arming `/v1`.
+1. Set the planner, coder, and router base URLs, model aliases, and slot counts (`-np`).
+2. Optionally set a slot save path (must match each llama-server `--slot-save-path`).
+3. Click **Save endpoints** / **Save router**, then **Start server**. Start
+   health-checks the upstreams before arming `/v1`.
 
 The rail lights up planner or coder as turns are routed; status shows reachability,
-the last route, and the discussion count.
+the last route, whether it used the fallback, and the discussion count.
 
 While autostart (or a managed engine launch) is in progress, the UI shows a
 distinct **starting** state instead of a flat "stopped": the sidebar status pill
@@ -241,7 +319,8 @@ app's documentation supplied as context (so the planner must be reachable).
 - Model: `auto` (or force `planner` / `coder`)
 
 In Cline/Roo you can also let Plan/Act map to `planner`/`coder` explicitly; with
-`auto`, llmrouter decides from intent + whether a plan is pending.
+`auto`, the tiny router model decides each turn (with `pending_plan` and the last
+assistant turn as context).
 
 ### IDE compatibility notes
 
@@ -280,16 +359,27 @@ folded back to the planner are added as `user` notes for the same reason.
 
 Quick notes from real debugging sessions:
 
+- **Every turn falls back to keywords / the coder never fires.** The router
+  endpoint is almost certainly serving the wrong kind of model. With
+  `LLMROUTER_DEBUG=1` you'll see `router classify: reply "…" is neither planner
+  nor coder`. Point the Router model at a **generative** `Qwen3-0.6B`, not the
+  `-Embedding-` variant, and relaunch it.
+- **The coder loops, re-emitting the plan and restarting.** That's mid-turn
+  re-routing — fixed by the tool-continuation guard (a continuation stays on the
+  coder). If you still see it, confirm you rebuilt; with `LLMROUTER_DEBUG=1` a
+  continuation should produce **no** `router classify` line at all.
+- **A "create a plan" first turn went to the coder.** Shouldn't happen now: with
+  no pending plan the grammar only allows `planner`. If it does, you're running an
+  older build.
+- **Watch routing live.** `LLMROUTER_DEBUG=1` logs each decision
+  (`router classify: model=… reply="coder" -> "coder"`), plus `REQ …`
+  (`ephemeral=`, `tools=`, `max_tokens=`), `ROUTE … slot=`, and `FWD -> …`.
 - **Errors are surfaced, not swallowed.** When an upstream call fails, the router
   logs it (`ERR forward …` / `FWD <- status=…` with the body) and, in streaming
   mode, emits an SSE `error` chunk so the IDE shows the reason instead of a
   silently cut, empty stream.
-- **`LLMROUTER_DEBUG=1`** dumps each incoming request body and key decisions
-  (`REQ …` with `ephemeral=`, `tools=`, `max_tokens=`; `ROUTE … slot=`;
-  `FWD -> …` with `id_slot`). Run with it when a client misbehaves but `curl`
-  doesn't.
 - ***"System message must be at the beginning"* (HTTP 400).** The model's chat
-  template requires a single leading `system` message. The router now merges the
+  template requires a single leading `system` message. The router merges the
   IDE's system prompt and its role contract into one — but **existing discussions
   in `llmrouter.db` keep their old layout**, so delete/rename the DB (or clear
   `model_contexts`) after upgrading to clear stale prefixes.
@@ -304,21 +394,24 @@ Quick notes from real debugging sessions:
 ## Files
 
 ```
-main.go      entrypoint, one listener for /v1 + control panel, auto-creates/migrates the DB
-config.go    config types, JSON load/save (endpoints, slot counts, router)
+main.go      entrypoint, one listener for /v1 + control panel, auto-creates/migrates the DB,
+             always launches the router model at autostart
+config.go    config types, JSON load/save (planner, coder, router — no "mode" field)
 store.go     SQLite: discussions, per-role context, plans, summaries (text only);
-             transcript-match discussion resolution + per-turn fingerprints + auto-migration
-openai.go    OpenAI request/response types
-router.go    intent routing: state rule + optional GBNF tiny model
-prompt.go    conversation signature (transcript + tool_calls), append-only prompt
-             building (single merged leading system message), plan/summary parsing
+             prompt_cache_key / transcript-match resolution + per-turn fingerprints + auto-migration
+openai.go    OpenAI request/response types (incl. prompt_cache_key)
+router.go    routing brain: tiny GBNF model classifies every turn; pending-plan grammar
+             guard; explicit-alias and tool-continuation guards; keyword fallback on failure
+prompt.go    conversation signature (transcript + tool_calls), last-user / last-assistant /
+             tool-continuation detection, append-only prompt building, plan/summary parsing
 upstream.go  llama-server client: id_slot/cache_prompt, streaming tee that also
              reassembles tool_calls, slot save/restore; logs the outgoing request
              and any non-200 body
 proxy.go     /v1 handler: resolve -> route -> build -> assign slot -> forward -> persist;
-             request/decision logging, surfaces upstream errors (SSE error chunk),
+             X-LLMRouter-Role/-Fallback headers, surfaces upstream errors (SSE error chunk),
              starting/running/stopped lifecycle phase
-admin.go     control-panel API + embedded UI
+admin.go     control-panel API + embedded UI (status reports last_route + last_route_fallback)
 slots.go     per-role slot pool: maps each (role, discussion) to a slot, LRU eviction
-web/index.html  the control panel (sidebar dashboard)
+web/index.html  the control panel (sidebar dashboard; Router card shows model-routing
+             vs keyword-fallback state)
 ```
