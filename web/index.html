@@ -229,6 +229,20 @@
             .dot.warn {
                 background: #eab308;
             }
+            @media (prefers-reduced-motion: no-preference) {
+                .dot.pulse {
+                    animation: dotpulse 1.2s ease-in-out infinite;
+                }
+                @keyframes dotpulse {
+                    0%,
+                    100% {
+                        opacity: 1;
+                    }
+                    50% {
+                        opacity: 0.3;
+                    }
+                }
+            }
 
             /* routing rail */
             .node {
@@ -269,6 +283,52 @@
                     50% {
                         filter: brightness(1.18);
                     }
+                }
+            }
+
+            /* routing wire: planner -> coder, animated while the coder works */
+            .wire {
+                position: relative;
+                flex: 1 1 auto;
+                height: 2px;
+                margin: 0 1rem;
+                background: #45464d;
+                border-radius: 2px;
+                overflow: hidden;
+            }
+            .wire::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                opacity: 0;
+                background: linear-gradient(
+                    90deg,
+                    transparent 0%,
+                    #2dd4bf 50%,
+                    transparent 100%
+                );
+                background-size: 45% 100%;
+                background-repeat: no-repeat;
+                background-position: -45% 0;
+                transition: opacity 0.3s;
+            }
+            @media (prefers-reduced-motion: no-preference) {
+                .wire.flow::after {
+                    opacity: 1;
+                    animation: wireflow 1s linear infinite;
+                }
+                @keyframes wireflow {
+                    0% {
+                        background-position: -45% 0;
+                    }
+                    100% {
+                        background-position: 145% 0;
+                    }
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .wire.flow {
+                    background: #2dd4bf;
                 }
             }
 
@@ -317,8 +377,33 @@
                 color: #3fb950;
                 min-height: 18px;
             }
+            .toast.err-wrap {
+                white-space: normal;
+                line-height: 1.4;
+                max-width: 38ch;
+            }
             .toast.err {
                 color: #ffb4ab;
+            }
+            .toast.muted {
+                color: #9aa0a6;
+            }
+            .spin {
+                width: 0.85rem;
+                height: 0.85rem;
+                border-radius: 50%;
+                border: 2px solid currentColor;
+                border-top-color: transparent;
+                display: inline-block;
+                vertical-align: middle;
+                animation: spin 0.8s linear infinite;
+                opacity: 0.8;
+                color: #9aa0a6;
+            }
+            @keyframes spin {
+                to {
+                    transform: rotate(360deg);
+                }
             }
 
             ::-webkit-scrollbar {
@@ -526,9 +611,7 @@
                                 >
                                     PLANNER
                                 </div>
-                                <div
-                                    class="flex-1 h-px bg-outline-variant mx-4"
-                                ></div>
+                                <div class="wire" id="routeWire"></div>
                                 <div
                                     class="node"
                                     data-role="coder"
@@ -908,10 +991,12 @@
                             data-i18n="eng.bareNote"
                         >
                             Heads up: this tab launches each engine with a
-                            minimal, portable command — no hardware tuning (GPU
-                            offload, KV-cache quantization, context size,
-                            tensor-parallel, slot persistence…). For best
-                            performance, run each engine as your own service or
+                            minimal, portable command and no hardware tuning by
+                            default (GPU offload, KV-cache quantization, context
+                            size, tensor-parallel, slot persistence…). You can
+                            add those flags yourself in the “Extra launch args”
+                            field — they are passed verbatim to the command. For
+                            full control, run each engine as your own service or
                             script tuned to your hardware and context, then just
                             point the Endpoints tab at its base URL — you can
                             skip this tab entirely.
@@ -1041,7 +1126,35 @@
                                 /><datalist id="filesP"></datalist>
                             </div>
 
-                            <div class="flex items-center gap-3 flex-wrap">
+                            <div class="flex flex-col gap-2 mb-5">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.extraArgs"
+                                    >Extra launch args</label
+                                >
+                                <input
+                                    id="argsP"
+                                    class="fld font-mono"
+                                    data-i18n-ph="eng.extraArgsPh"
+                                    placeholder="--n-gpu-layers 99 --ctx-size 8192"
+                                />
+                            </div>
+
+                            <div class="flex items-end gap-3 flex-wrap">
+                                <div class="flex flex-col gap-1">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="eng.port"
+                                        >Port</label
+                                    >
+                                    <input
+                                        id="portP"
+                                        class="fld"
+                                        style="width: 8rem"
+                                        inputmode="numeric"
+                                        placeholder="8080"
+                                    />
+                                </div>
                                 <button
                                     id="launchP"
                                     class="text-on-primary font-body-md font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-[filter]"
@@ -1057,7 +1170,14 @@
                                 >
                                     Stop
                                 </button>
-                                <span class="toast" id="launchPtoast"></span>
+                                <span class="toast err" id="launchPtoast"></span>
+                            </div>
+                            <div
+                                class="flex items-center gap-2 mt-3"
+                                id="engStatRowP"
+                            >
+                                <span class="spin hidden" id="engSpinP"></span>
+                                <span class="toast" id="engStatP"></span>
                             </div>
                         </div>
 
@@ -1181,7 +1301,35 @@
                                 /><datalist id="filesC"></datalist>
                             </div>
 
-                            <div class="flex items-center gap-3 flex-wrap">
+                            <div class="flex flex-col gap-2 mb-5">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.extraArgs"
+                                    >Extra launch args</label
+                                >
+                                <input
+                                    id="argsC"
+                                    class="fld font-mono"
+                                    data-i18n-ph="eng.extraArgsPh"
+                                    placeholder="--n-gpu-layers 99 --ctx-size 8192"
+                                />
+                            </div>
+
+                            <div class="flex items-end gap-3 flex-wrap">
+                                <div class="flex flex-col gap-1">
+                                    <label
+                                        class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                        data-i18n="eng.port"
+                                        >Port</label
+                                    >
+                                    <input
+                                        id="portC"
+                                        class="fld"
+                                        style="width: 8rem"
+                                        inputmode="numeric"
+                                        placeholder="8081"
+                                    />
+                                </div>
                                 <button
                                     id="launchC"
                                     class="text-on-primary font-body-md font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-[filter]"
@@ -1197,7 +1345,14 @@
                                 >
                                     Stop
                                 </button>
-                                <span class="toast" id="launchCtoast"></span>
+                                <span class="toast err" id="launchCtoast"></span>
+                            </div>
+                            <div
+                                class="flex items-center gap-2 mt-3"
+                                id="engStatRowC"
+                            >
+                                <span class="spin hidden" id="engSpinC"></span>
+                                <span class="toast" id="engStatC"></span>
                             </div>
                         </div>
                     </div>
@@ -1229,6 +1384,18 @@
                             the planner and coder and arms /v1 once both are
                             healthy.
                         </p>
+                        <div
+                            id="autostartBanner"
+                            class="hidden items-center gap-3 mb-6 px-4 py-3 rounded-lg border border-secondary bg-secondary-container"
+                        >
+                            <span class="spin"></span>
+                            <span
+                                class="font-body-sm text-body-sm text-on-secondary-container"
+                                data-i18n="eng.autostartRunning"
+                                >Auto-start in progress — launching engines,
+                                arming /v1 once healthy…</span
+                            >
+                        </div>
                         <div class="flex items-center gap-4 flex-wrap">
                             <button
                                 id="saveEngine"
@@ -1270,33 +1437,6 @@
                         <div
                             class="grid grid-cols-1 md:grid-cols-2 gap-gutter mb-8"
                         >
-                            <div class="flex flex-col gap-2">
-                                <label
-                                    class="font-label-caps text-label-caps text-on-surface-variant"
-                                    data-i18n="router.mode"
-                                    >Mode</label
-                                >
-                                <div class="selwrap">
-                                    <select id="rMode" class="fld">
-                                        <option
-                                            value="rule"
-                                            data-i18n="router.optRule"
-                                        >
-                                            rule — state + keywords (no model)
-                                        </option>
-                                        <option
-                                            value="llm"
-                                            data-i18n="router.optLlm"
-                                        >
-                                            llm — tiny model breaks ties
-                                        </option>
-                                    </select>
-                                    <span
-                                        class="material-symbols-outlined caret"
-                                        >expand_more</span
-                                    >
-                                </div>
-                            </div>
                             <div class="flex flex-col gap-2">
                                 <label
                                     class="font-label-caps text-label-caps text-on-surface-variant"
@@ -1483,7 +1623,35 @@
                             /><datalist id="filesR"></datalist>
                         </div>
 
-                        <div class="flex items-center gap-3 flex-wrap">
+                        <div class="flex flex-col gap-2 mb-5">
+                            <label
+                                class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                data-i18n="eng.extraArgs"
+                                >Extra launch args</label
+                            >
+                            <input
+                                id="argsR"
+                                class="fld font-mono"
+                                data-i18n-ph="eng.extraArgsPh"
+                                placeholder="--n-gpu-layers 99 --ctx-size 8192"
+                            />
+                        </div>
+
+                        <div class="flex items-end gap-3 flex-wrap">
+                            <div class="flex flex-col gap-1">
+                                <label
+                                    class="font-body-sm text-body-sm text-on-surface-variant ml-1"
+                                    data-i18n="eng.port"
+                                    >Port</label
+                                >
+                                <input
+                                    id="portR"
+                                    class="fld"
+                                    style="width: 8rem"
+                                    inputmode="numeric"
+                                    placeholder="8082"
+                                />
+                            </div>
                             <button
                                 id="launchR"
                                 class="text-on-primary font-body-md font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-[filter]"
@@ -1499,7 +1667,11 @@
                             >
                                 Stop
                             </button>
-                            <span class="toast" id="launchRtoast"></span>
+                            <span class="toast err" id="launchRtoast"></span>
+                        </div>
+                        <div class="flex items-center gap-2 mt-3" id="engStatRowR">
+                            <span class="spin hidden" id="engSpinR"></span>
+                            <span class="toast" id="engStatR"></span>
                         </div>
                     </div>
                 </section>
@@ -1728,6 +1900,7 @@
                     "title.discussions": "Discussions",
                     "status.label": "Status:",
                     "status.running": "running",
+                    "status.starting": "starting…",
                     "status.stopped": "stopped",
                     "btn.start": "Start",
                     "btn.stop": "Stop",
@@ -1757,16 +1930,23 @@
                     "state.missing": "missing",
                     "state.offline": "offline",
                     "state.ready": "ready",
+                    "state.fallback": "fallback",
                     "state.running": "running",
+                    "state.starting": "starting…",
                     "state.stopped": "stopped",
                     "line.setUrlModel": "Set the base URL and model",
                     "line.notResponding": "not responding",
                     "line.slotsWarm": "slots warm",
                     "line.setRouter": "Set the router model and URL",
                     "line.routerNotResponding": "Router model not responding",
+                    "line.modelRouting": "Model routing every turn",
+                    "line.fallbackActive":
+                        "Model unavailable — using keyword fallback",
                     "line.ruleDesc": "State + keywords, no model",
                     "line.llmDesc": "Tiny model breaks ties",
                     "line.serving": "Serving /v1 — routing live",
+                    "line.starting": "Engines loading — arming /v1…",
+                    "line.loadingModel": "Launching — loading the model…",
                     "line.clickStart": "Click Start to arm the endpoint",
                     "ep.subtitle":
                         "Two resident llama-server backends. Slots is each server's -np value: the number of discussions it can keep warm at once.",
@@ -1779,13 +1959,10 @@
                     "ep.note": "Slot counts apply when you next click Start.",
                     "router.subtitle":
                         "Decides per turn whether a message goes to the planner or the coder.",
-                    "router.mode": "Mode",
-                    "router.optRule": "rule — state + keywords (no model)",
-                    "router.optLlm": "llm — tiny model breaks ties",
                     "router.modelAlias": "Router model alias",
-                    "router.baseUrl": "Router base URL (mode llm)",
+                    "router.baseUrl": "Router base URL",
                     "router.save": "Save router",
-                    "router.modelTitle": "Router model (mode llm)",
+                    "router.modelTitle": "Router model",
                     "router.useRec": "Use recommended",
                     "router.recText":
                         "The router only classifies each turn (planner vs coder), so a tiny instruct model is plenty. Recommended: Qwen3-0.6B on llama.cpp.",
@@ -1829,7 +2006,7 @@
                     "eng.guideLink":
                         "Read a guide to the engines and how to install them",
                     "eng.bareNote":
-                        "Heads up: this tab launches each engine with a minimal, portable command — no hardware tuning (GPU offload, KV-cache quantization, context size, tensor-parallel, slot persistence…). For best performance, run each engine as your own service or script tuned to your hardware and context, then just point the Endpoints tab at its base URL — you can skip this tab entirely.",
+                        "Heads up: this tab launches each engine with a minimal, portable command and no hardware tuning by default (GPU offload, KV-cache quantization, context size, tensor-parallel, slot persistence…). You can add those flags yourself in the “Extra launch args” field — they are passed verbatim to the command. For full control, run each engine as your own service or script tuned to your hardware and context, then just point the Endpoints tab at its base URL — you can skip this tab entirely.",
                     "eng.binHelp":
                         "Find it on your machine:\n• Windows (PowerShell):  Get-Command llama-server\n• Linux / macOS:  which llama-server",
                     "eng.test": "Test",
@@ -1840,12 +2017,17 @@
                     "eng.searchPh": "Search Hugging Face — e.g. qwen2.5 coder",
                     "eng.repo": "Repository",
                     "eng.file": "Quant file (.gguf)",
+                    "eng.extraArgs": "Extra launch args",
+                    "eng.extraArgsPh":
+                        "extra flags passed verbatim, e.g. --n-gpu-layers 99 --ctx-size 8192",
                     "eng.launch": "Launch",
                     "eng.stop": "Stop",
                     "eng.autostart":
                         "Auto-start everything when the server boots",
                     "eng.autostartHint":
                         "When enabled, starting naanollm-router also launches the planner and coder and arms /v1 once both are healthy.",
+                    "eng.autostartRunning":
+                        "Auto-start in progress — launching engines, arming /v1 once both are healthy…",
                     "eng.save": "Save config",
                     "eng.note":
                         "Alias, port and parallel slots come from the Endpoints tab. The quant file is optional — leave it empty to let llama.cpp pick a default.",
@@ -1857,6 +2039,13 @@
                     "eng.launchFailed": "Launch failed",
                     "eng.stopped": "Stopped",
                     "eng.testing": "Testing…",
+                    "eng.port": "Port",
+                    "eng.stStarting": "Starting the engine…",
+                    "eng.stDownloading":
+                        "Downloading / loading the model…",
+                    "eng.stReady": "Model ready",
+                    "eng.stExited":
+                        "Process stopped — check the engine logs",
                     "err.binMissing": "Binary path is not set for {role}.",
                     "err.badPort":
                         "Could not read a port from the base URL for {role}.",
@@ -1882,6 +2071,7 @@
                     "title.discussions": "Discussions",
                     "status.label": "Statut :",
                     "status.running": "en marche",
+                    "status.starting": "démarrage…",
                     "status.stopped": "arrêté",
                     "btn.start": "Démarrer",
                     "btn.stop": "Arrêter",
@@ -1911,7 +2101,9 @@
                     "state.missing": "manquant",
                     "state.offline": "hors ligne",
                     "state.ready": "prêt",
+                    "state.fallback": "secours",
                     "state.running": "en marche",
+                    "state.starting": "démarrage…",
                     "state.stopped": "arrêté",
                     "line.setUrlModel": "Définissez l'URL de base et le modèle",
                     "line.notResponding": "ne répond pas",
@@ -1920,9 +2112,14 @@
                         "Définissez le modèle et l'URL du routeur",
                     "line.routerNotResponding":
                         "Le modèle de routeur ne répond pas",
+                    "line.modelRouting": "Le modèle route chaque tour",
+                    "line.fallbackActive":
+                        "Modèle indisponible — secours par mots-clés",
                     "line.ruleDesc": "État + mots-clés, aucun modèle",
                     "line.llmDesc": "Un petit modèle départage",
                     "line.serving": "Sert /v1 — routage actif",
+                    "line.starting": "Chargement des moteurs — activation de /v1…",
+                    "line.loadingModel": "Lancement — chargement du modèle…",
                     "line.clickStart":
                         "Cliquez sur Démarrer pour activer le point d'accès",
                     "ep.subtitle":
@@ -1938,13 +2135,10 @@
                         "Le nombre de slots s'applique au prochain Démarrer.",
                     "router.subtitle":
                         "Décide à chaque tour si un message va au planificateur ou au codeur.",
-                    "router.mode": "Mode",
-                    "router.optRule": "rule — état + mots-clés (aucun modèle)",
-                    "router.optLlm": "llm — un petit modèle départage",
                     "router.modelAlias": "Alias du modèle de routeur",
-                    "router.baseUrl": "URL de base du routeur (mode llm)",
+                    "router.baseUrl": "URL de base du routeur",
                     "router.save": "Enregistrer le routeur",
-                    "router.modelTitle": "Modèle du routeur (mode llm)",
+                    "router.modelTitle": "Modèle du routeur",
                     "router.useRec": "Utiliser la recommandation",
                     "router.recText":
                         "Le routeur ne fait que classer chaque tour (planificateur ou codeur), donc un petit modèle instruct suffit largement. Recommandé : Qwen3-0.6B sur llama.cpp.",
@@ -1990,7 +2184,7 @@
                     "eng.guideLink":
                         "Lire un guide des moteurs et comment les installer",
                     "eng.bareNote":
-                        "À savoir : cet onglet lance chaque moteur avec une commande minimale et portable — sans réglages matériels (offload GPU, quantification du cache KV, taille de contexte, tensor-parallel, persistance des slots…). Pour de meilleures performances, lancez chaque moteur via votre propre service ou script optimisé pour votre matériel et votre contexte, puis raccordez-le simplement depuis l'onglet Points d'accès via son URL de base — vous pouvez alors ignorer cet onglet.",
+                        "À savoir : cet onglet lance chaque moteur avec une commande minimale et portable, sans réglages matériels par défaut (offload GPU, quantification du cache KV, taille de contexte, tensor-parallel, persistance des slots…). Vous pouvez toutefois ajouter ces options vous-même dans le champ « Arguments de lancement supplémentaires » : elles sont passées telles quelles à la commande. Pour un contrôle total, lancez plutôt chaque moteur via votre propre service ou script optimisé pour votre matériel et votre contexte, puis raccordez-le depuis l'onglet Points d'accès via son URL de base — vous pouvez alors ignorer cet onglet.",
                     "eng.binHelp":
                         "Trouvez-le sur votre machine :\n• Windows (PowerShell) :  Get-Command llama-server\n• Linux / macOS :  which llama-server",
                     "eng.test": "Tester",
@@ -2002,12 +2196,17 @@
                         "Rechercher sur Hugging Face — ex. qwen2.5 coder",
                     "eng.repo": "Dépôt",
                     "eng.file": "Fichier quant (.gguf)",
+                    "eng.extraArgs": "Arguments de lancement supplémentaires",
+                    "eng.extraArgsPh":
+                        "options passées telles quelles, ex. --n-gpu-layers 99 --ctx-size 8192",
                     "eng.launch": "Lancer",
                     "eng.stop": "Arrêter",
                     "eng.autostart":
                         "Tout relancer automatiquement au démarrage du serveur",
                     "eng.autostartHint":
                         "Quand c'est activé, démarrer naanollm-router lance aussi le planificateur et le codeur et arme /v1 dès que les deux sont prêts.",
+                    "eng.autostartRunning":
+                        "Démarrage automatique en cours — lancement des moteurs, /v1 sera armé dès que les deux sont prêts…",
                     "eng.save": "Enregistrer la config",
                     "eng.note":
                         "L'alias, le port et les slots parallèles proviennent de l'onglet Points d'accès. Le fichier quant est optionnel — laissez-le vide pour que llama.cpp choisisse par défaut.",
@@ -2019,6 +2218,13 @@
                     "eng.launchFailed": "Échec du lancement",
                     "eng.stopped": "Arrêté",
                     "eng.testing": "Test…",
+                    "eng.port": "Port",
+                    "eng.stStarting": "Démarrage du moteur…",
+                    "eng.stDownloading":
+                        "Téléchargement / chargement du modèle…",
+                    "eng.stReady": "Modèle prêt",
+                    "eng.stExited":
+                        "Processus arrêté — vérifiez les logs du moteur",
                     "err.binMissing":
                         "Le chemin du binaire n'est pas défini pour {role}.",
                     "err.badPort":
@@ -2121,22 +2327,27 @@
                 $("cBase").value = c.coder.base_url || "";
                 $("cModel").value = c.coder.model || "";
                 $("cSlots").value = c.coder.slots || 4;
-                $("rMode").value = c.router.mode || "rule";
                 $("rModel").value = c.router.model || "";
                 $("rBase").value = c.router.base_url || "";
                 $("engineR").value = c.router.engine || "llamacpp";
                 $("binR").value = c.router.bin_path || "";
                 $("repoR").value = c.router.hf_repo || "";
                 $("fileR").value = c.router.hf_file || "";
+                $("argsR").value = c.router.extra_args || "";
                 $("autostart").checked = !!c.autostart;
                 $("engineP").value = c.planner.engine || "llamacpp";
                 $("binP").value = c.planner.bin_path || "";
                 $("repoP").value = c.planner.hf_repo || "";
                 $("fileP").value = c.planner.hf_file || "";
+                $("argsP").value = c.planner.extra_args || "";
                 $("engineC").value = c.coder.engine || "llamacpp";
                 $("binC").value = c.coder.bin_path || "";
                 $("repoC").value = c.coder.hf_repo || "";
                 $("fileC").value = c.coder.hf_file || "";
+                $("argsC").value = c.coder.extra_args || "";
+                $("portP").value = portFromUrl(c.planner.base_url);
+                $("portC").value = portFromUrl(c.coder.base_url);
+                $("portR").value = portFromUrl(c.router.base_url);
                 updateBase();
             }
             function fromForm() {
@@ -2158,7 +2369,7 @@
                         hf_repo: $("repoP").value.trim(),
                         hf_file: $("fileP").value.trim(),
                         model_path: pm.model_path || "",
-                        extra_args: pm.extra_args || "",
+                        extra_args: $("argsP").value.trim(),
                     },
                     coder: {
                         name: "coder",
@@ -2170,10 +2381,9 @@
                         hf_repo: $("repoC").value.trim(),
                         hf_file: $("fileC").value.trim(),
                         model_path: cm.model_path || "",
-                        extra_args: cm.extra_args || "",
+                        extra_args: $("argsC").value.trim(),
                     },
                     router: {
-                        mode: $("rMode").value,
                         base_url: $("rBase").value.trim(),
                         model: $("rModel").value.trim(),
                         engine: $("engineR").value,
@@ -2181,7 +2391,7 @@
                         hf_repo: $("repoR").value.trim(),
                         hf_file: $("fileR").value.trim(),
                         model_path: rm.model_path || "",
-                        extra_args: rm.extra_args || "",
+                        extra_args: $("argsR").value.trim(),
                         slots: rm.slots || 1,
                     },
                 };
@@ -2262,24 +2472,37 @@
 
             /* ---------------- status ---------------- */
             function setState(dotId, txtId, lineId, st) {
-                $(dotId).className = "dot " + st.cls;
+                // st.spin renders a loading spinner in place of the status dot
+                // (used while an engine is launching/downloading during autostart).
+                $(dotId).className = st.spin ? "spin" : "dot " + st.cls;
                 $(txtId).textContent = st.label;
                 if (lineId) $(lineId).textContent = st.line;
             }
-            function compState(c) {
+            function compState(c, starting) {
                 if (!c.configured)
                     return {
                         cls: "warn",
                         label: t("state.missing"),
                         line: t("line.setUrlModel"),
                     };
-                if (!c.reachable)
+                if (!c.reachable) {
+                    // Launching (autostart in progress, or a managed process is
+                    // alive but not yet answering /health): show loading, not the
+                    // alarming red "offline".
+                    if (starting || c.process)
+                        return {
+                            spin: true,
+                            cls: "warn",
+                            label: t("state.loading"),
+                            line: t("line.loadingModel"),
+                        };
                     return {
                         cls: "bad",
                         label: t("state.offline"),
                         line:
                             (c.base_url || "") + " " + t("line.notResponding"),
                     };
+                }
                 return {
                     cls: "ok",
                     label: t("state.ready"),
@@ -2303,31 +2526,58 @@
                 } catch {
                     return;
                 }
-                $("pillDot").className = "dot " + (s.running ? "ok" : "warn");
-                $("pillTxt").textContent = s.running
-                    ? t("status.running")
-                    : t("status.stopped");
-                $("start").disabled = s.running;
-                $("stop").disabled = !s.running;
+                const phase = s.phase || (s.running ? "running" : "stopped");
+                $("pillDot").className =
+                    "dot " +
+                    (phase === "running"
+                        ? "ok"
+                        : phase === "starting"
+                          ? "warn pulse"
+                          : "warn");
+                $("pillTxt").textContent =
+                    phase === "running"
+                        ? t("status.running")
+                        : phase === "starting"
+                          ? t("status.starting")
+                          : t("status.stopped");
+                $("start").disabled = s.running || phase === "starting";
+                $("stop").disabled = !s.running && phase !== "starting";
+
+                const banner = $("autostartBanner");
+                if (banner) {
+                    const show = phase === "starting";
+                    banner.classList.toggle("hidden", !show);
+                    banner.classList.toggle("flex", show);
+                }
 
                 $("nodePlanner").classList.toggle(
                     "on",
                     s.last_route === "planner",
                 );
                 $("nodeCoder").classList.toggle("on", s.last_route === "coder");
+                $("routeWire").classList.toggle(
+                    "flow",
+                    (s.coder.slots_used || 0) > 0,
+                );
                 $("vLast").textContent = s.last_route || "—";
                 $("vDisc").textContent = s.discussions;
                 $("navDisc").textContent = s.discussions;
                 $("vBase").textContent =
                     (s.listen_addr || "").replace(/^:/, "localhost:") + "/v1";
 
+                const starting = phase === "starting";
                 setState(
                     "dPlanner",
                     "sPlanner",
                     "lPlanner",
-                    compState(s.planner),
+                    compState(s.planner, starting),
                 );
-                setState("dCoder", "sCoder", "lCoder", compState(s.coder));
+                setState(
+                    "dCoder",
+                    "sCoder",
+                    "lCoder",
+                    compState(s.coder, starting),
+                );
                 renderBar(
                     "barPlanner",
                     s.planner.slots_used,
@@ -2347,18 +2597,26 @@
                               line: t("line.setRouter"),
                           }
                         : !r.reachable
-                          ? {
-                                cls: "bad",
-                                label: t("state.offline"),
-                                line: t("line.routerNotResponding"),
-                            }
+                          ? starting || r.process
+                              ? {
+                                    spin: true,
+                                    cls: "warn",
+                                    label: t("state.loading"),
+                                    line: t("line.loadingModel"),
+                                }
+                              : {
+                                    cls: "bad",
+                                    label: t("state.offline"),
+                                    line: t("line.routerNotResponding"),
+                                }
                           : {
-                                cls: "ok",
-                                label: r.mode,
-                                line:
-                                    r.mode === "rule"
-                                        ? t("line.ruleDesc")
-                                        : t("line.llmDesc"),
+                                cls: s.last_route_fallback ? "warn" : "ok",
+                                label: s.last_route_fallback
+                                    ? t("state.fallback")
+                                    : t("state.ready"),
+                                line: s.last_route_fallback
+                                    ? t("line.fallbackActive")
+                                    : t("line.modelRouting"),
                             },
                 );
                 setState(
@@ -2371,17 +2629,113 @@
                               label: t("state.running"),
                               line: t("line.serving"),
                           }
-                        : {
-                              cls: "warn",
-                              label: t("state.stopped"),
-                              line: t("line.clickStart"),
-                          },
+                        : phase === "starting"
+                          ? {
+                                spin: true,
+                                cls: "warn",
+                                label: t("state.starting"),
+                                line: t("line.starting"),
+                            }
+                          : {
+                                cls: "warn",
+                                label: t("state.stopped"),
+                                line: t("line.clickStart"),
+                            },
                 );
 
                 setProc("P", s.planner);
                 setProc("C", s.coder);
                 setProc("R", s.router);
+
+                applyEngStat("P", s.planner);
+                applyEngStat("C", s.coder);
+                applyEngStat("R", s.router);
             }
+
+            // Remembers which roles the user launched from this tab, so an
+            // engine that dies (process gone, never became reachable) can be
+            // shown as "exited" rather than silently reverting to idle.
+            const engLaunched = { P: false, C: false, R: false };
+
+            // setEngStat renders the prominent launch-status line under a card's
+            // Launch button: a spinner + message while the model downloads and
+            // loads, a green "ready" once it answers /health, an error if it died.
+            function setEngStat(suf, kind) {
+                const txt = $("engStat" + suf),
+                    spin = $("engSpin" + suf);
+                if (!txt || !spin) return;
+                let msg = "",
+                    cls = "toast muted",
+                    spinning = false;
+                if (kind === "starting") {
+                    msg = t("eng.stStarting");
+                    spinning = true;
+                } else if (kind === "loading") {
+                    msg = t("eng.stDownloading");
+                    spinning = true;
+                } else if (kind === "ready") {
+                    msg = "✓ " + t("eng.stReady");
+                    cls = "toast";
+                } else if (kind === "exited") {
+                    msg = t("eng.stExited");
+                    cls = "toast err";
+                } else if (kind === "stopped") {
+                    msg = t("eng.stopped");
+                }
+                txt.textContent = msg;
+                txt.className = cls;
+                spin.classList.toggle("hidden", !spinning);
+            }
+
+            // setEngError surfaces the full launch error in the role's status
+            // row and leaves it there (no auto-hide) until the next launch/stop,
+            // so the user can actually read what went wrong.
+            function setEngError(suf, msg) {
+                const txt = $("engStat" + suf),
+                    spin = $("engSpin" + suf);
+                if (spin) spin.classList.add("hidden");
+                if (txt) {
+                    txt.className = "toast err err-wrap";
+                    txt.textContent = "✗ " + (msg || t("eng.launchFailed"));
+                }
+            }
+
+            // applyEngStat maps a role's live {process, reachable} into the line.
+            function applyEngStat(suf, c) {
+                if (!c) return;
+                if (c.process && c.reachable) {
+                    engLaunched[suf] = false;
+                    setEngStat(suf, "ready");
+                } else if (c.process) {
+                    engLaunched[suf] = true; // alive, still downloading/loading
+                    setEngStat(suf, "loading");
+                } else if (c.reachable) {
+                    setEngStat(suf, "ready"); // running outside this panel
+                } else if (engLaunched[suf]) {
+                    engLaunched[suf] = false;
+                    setEngStat(suf, "exited");
+                }
+                // otherwise idle: leave whatever message is there (blank/stopped)
+            }
+
+            // --- port <-> base-url helpers (Engine tab port field) -----------
+            function portFromUrl(u) {
+                const m = String(u || "").match(/:(\d+)(?:\/|$)/);
+                return m ? m[1] : "";
+            }
+            function withPort(u, port) {
+                u = String(u || "").trim();
+                port = String(port || "").trim();
+                if (!port) return u;
+                if (!u) return "http://127.0.0.1:" + port;
+                if (/:(\d+)(\/|$)/.test(u))
+                    return u.replace(/:(\d+)(\/|$)/, ":" + port + "$2");
+                return u.replace(
+                    /^(https?:\/\/[^/:]+)(\/|$)/,
+                    "$1:" + port + "$2",
+                );
+            }
+            const baseFieldFor = { P: "pBase", C: "cBase", R: "rBase" };
 
             function setProc(suf, c) {
                 const dot = $("proc" + suf),
@@ -2569,6 +2923,16 @@
                 } catch {}
             }
 
+            // When a model is picked from search, keep the served alias honest
+            // so the dashboard, endpoints tab and routing all show the model
+            // that is actually loaded (avoids the stale-alias confusion).
+            const aliasIdFor = { P: "pModel", C: "cModel", R: "rModel" };
+            function aliasFromRepo(repo) {
+                let s = (repo || "").split("/").pop() || "";
+                s = s.replace(/\.gguf$/i, "").replace(/[-_]?gguf$/i, "");
+                return s.toLowerCase().trim();
+            }
+
             function setupPicker(suf, role) {
                 const q = $("hfq" + suf),
                     res = $("hfres" + suf),
@@ -2655,6 +3019,8 @@
                         d.onclick = () => {
                             repo.value = m.id;
                             file.value = "";
+                            const al = $(aliasIdFor[suf]);
+                            if (al) al.value = aliasFromRepo(m.id);
                             hide();
                             if (engMeta(suf).gguf) loadFiles(m.id);
                         };
@@ -2673,8 +3039,11 @@
                     }
                 });
                 repo.addEventListener("change", () => {
-                    if (engMeta(suf).gguf && repo.value.trim())
+                    if (engMeta(suf).gguf && repo.value.trim()) {
+                        const al = $(aliasIdFor[suf]);
+                        if (al) al.value = aliasFromRepo(repo.value.trim());
                         loadFiles(repo.value.trim());
+                    }
                 });
                 document.addEventListener("click", (e) => {
                     if (!res.contains(e.target) && e.target !== q) hide();
@@ -2714,8 +3083,34 @@
 
             async function launchRole(role, suf) {
                 const tn = $("launch" + suf + "toast");
-                tn.className = "toast";
-                tn.textContent = t("eng.launching");
+                tn.className = "toast err";
+                tn.textContent = "";
+
+                // The Engine tab's Port field is the source of truth for launch:
+                // fold it into this role's base URL before saving, so the engine
+                // process is started on that port (and the Endpoints tab agrees).
+                const baseId = baseFieldFor[suf];
+                const pf = $("port" + suf);
+                if (baseId && pf && pf.value.trim()) {
+                    $(baseId).value = withPort(
+                        $(baseId).value.trim(),
+                        pf.value.trim(),
+                    );
+                }
+
+                engLaunched[suf] = true;
+                setEngStat(suf, "starting");
+
+                // Keep the served alias honest with the model actually being
+                // launched, whatever way the repo was set (search-click, typed,
+                // pasted, or pre-filled). The alias drives the dashboard,
+                // endpoints tab and routing — a stale one is pure confusion.
+                const repoEl = $("repo" + suf),
+                    aliasEl = $(aliasIdFor[suf]);
+                if (aliasEl && repoEl && repoEl.value.trim()) {
+                    aliasEl.value = aliasFromRepo(repoEl.value.trim());
+                }
+
                 await saveAll();
                 let r;
                 try {
@@ -2725,21 +3120,18 @@
                         body: JSON.stringify({ role }),
                     });
                 } catch {
-                    tn.className = "toast err";
-                    tn.textContent = t("eng.launchFailed");
+                    engLaunched[suf] = false;
+                    setEngError(suf, t("eng.launchFailed"));
                     return;
                 }
-                if (r.ok) {
-                    tn.className = "toast";
-                    tn.textContent = t("eng.launched");
-                } else {
+                if (!r.ok) {
                     const e = await r.json().catch(() => ({}));
-                    tn.className = "toast err";
-                    tn.textContent = errMsg(e, "eng.launchFailed");
+                    engLaunched[suf] = false;
+                    setEngError(suf, errMsg(e, "eng.launchFailed"));
+                    return;
                 }
-                setTimeout(() => {
-                    tn.textContent = "";
-                }, 6000);
+                // Launched: the periodic refresh() now reflects download/loading
+                // via applyEngStat, flipping to "ready" once /health answers.
                 refresh();
             }
             async function stopRole(role, suf) {
@@ -2750,12 +3142,8 @@
                         body: JSON.stringify({ role }),
                     });
                 } catch {}
-                const tn = $("launch" + suf + "toast");
-                tn.className = "toast";
-                tn.textContent = t("eng.stopped");
-                setTimeout(() => {
-                    tn.textContent = "";
-                }, 3000);
+                engLaunched[suf] = false;
+                setEngStat(suf, "stopped");
                 refresh();
             }
 
@@ -2766,11 +3154,10 @@
             setupPicker("R", "router");
 
             function updateRouterMode() {
+                // The router model is the only routing brain — always shown.
                 const el = $("routerManaged");
-                if (el)
-                    el.style.display = $("rMode").value === "llm" ? "" : "none";
+                if (el) el.style.display = "";
             }
-            $("rMode").addEventListener("change", updateRouterMode);
             $("useRecRouter").onclick = () => {
                 $("engineR").value = "llamacpp";
                 $("rModel").value = "qwen3-0.6b";

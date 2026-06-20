@@ -4,22 +4,31 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
 
 // Role contracts. Kept tiny so they don't fight an IDE's own large system
 // prompt: they're appended as a short extra system note, not a replacement.
-const plannerContract = `When you produce an implementation plan, emit it as a fenced block:
+const plannerContract = `You are the planner. Produce a plan and nothing else.
+Emit exactly one fenced block, then STOP — no preamble, no prose after it, and never start implementing or calling tools:
 ` + "```plan" + `
 {"subtasks":[{"id":"t1","goal":"...","success":"...","context_refs":["path:lines"],"tools":["read_file","edit_file"],"depends_on":[]}]}
 ` + "```" + `
-Reason freely before it. Put references, not full code, in context_refs.`
+Use references, not code, in context_refs. After the closing fence, output nothing further.`
 
-const coderContract = `Execute the entire plan — every subtask, in dependency order — using your tools.
-Only once all subtasks are complete, end your final message with one line starting
-exactly with "FINISH:" followed by a 2-3 line summary of what changed and the
-outcome. Emit FINISH exactly once, at the very end. Do not restate the plan.`
+const coderContract = `You are the executor, not a planner. The plan is already approved — your job is to make the changes, not to discuss them.
+
+- Act immediately: start calling tools on the first subtask. Do not deliberate about whether the plan is correct or complete.
+- You have the full tool set (create_directory, write_file, edit_file, read_file, terminal, …). Use whatever each subtask needs. If a file or directory does not exist yet, CREATE it.
+- The subtask goals are what matter. Any tool hints carried over from planning are NOT restrictions — ignore them if they get in the way.
+- Work in dependency order. Do not skip, redesign, replan, re-explain, or propose alternatives.
+- Keep prose to a minimum — prefer tool calls over explanation.
+
+When every subtask is complete, output exactly one final line:
+FINISH: <2-3 line summary of what changed>
+Do not restate the plan.`
 
 var (
 	planBlockRe = regexp.MustCompile("(?s)```plan\\s*(.*?)```")
@@ -35,6 +44,12 @@ type ConvSig struct {
 	ToolsJSON  string   // last seen tools array (stored for display; not identity)
 	AnchorKey  string   // sha256 of the normalized first user message (first-turn dedup)
 	Anchors    []string // normalized assistant messages, in order (the continuation key)
+	// ClientKey is the client-supplied stable conversation id (OpenAI
+	// prompt_cache_key), when the client sends one. It is content-independent and
+	// per-thread, so it is a stronger identity than the transcript: it is used as
+	// the PRIMARY discussion key, with the transcript anchors kept as a fallback
+	// for clients that don't send it.
+	ClientKey string
 }
 
 // envDetailsRe strips the volatile context blocks IDE/agent clients append to
@@ -46,6 +61,15 @@ var envDetailsRe = regexp.MustCompile(`(?is)<environment_details>.*?</environmen
 // re-sent history and some drop them; stripping on both sides (store + incoming)
 // keeps the per-turn fingerprint stable regardless.
 var reasoningRe = regexp.MustCompile(`(?is)<think(?:ing)?>.*?</think(?:ing)?>`)
+
+// utilityPromptRe spots IDE meta one-shots that operate ON the conversation
+// rather than continuing it — thread-title and thread-summary generation (Zed
+// fires these alongside the real turn). They carry no tools and no
+// prompt_cache_key, and don't always cap max_tokens, so they slip past the
+// token-budget check in isEphemeral and would otherwise spawn a throwaway
+// discussion and pin a slot. Anchoring on "...conversation" avoids catching a
+// genuine "summarize this file/function" task.
+var utilityPromptRe = regexp.MustCompile(`(?i)\b(title|summary|summari[sz]e|recap)\b[\s\S]{0,40}(\bthis conversation\b|\b(for|of|about) (the|this|our) conversation\b)`)
 
 // ConversationSignature derives a stable identity for the conversation the
 // request belongs to. See ConvSig for why only the assistant transcript counts.
@@ -76,6 +100,7 @@ func ConversationSignature(req ChatRequest) ConvSig {
 		ToolsJSON:  string(tb),
 		AnchorKey:  hex.EncodeToString(h[:]),
 		Anchors:    anchors,
+		ClientKey:  strings.TrimSpace(req.PromptCacheKey),
 	}
 }
 
@@ -166,6 +191,45 @@ func lastUserText(req ChatRequest) string {
 	return ""
 }
 
+// lastAssistantText returns the newest assistant message text in the request,
+// trimmed — used to give the router a little context about what just happened.
+func lastAssistantText(req ChatRequest) string {
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "assistant" {
+			return strings.TrimSpace(req.Messages[i].Text())
+		}
+	}
+	return ""
+}
+
+// isToolContinuation reports whether this request is a mid-turn agentic step
+// (the client fed tool results back and wants the model to continue) rather
+// than a fresh user turn. The signal: after the newest user message there is a
+// tool result or an assistant message that issued tool_calls. Only the coder is
+// given tools, so a continuation always belongs to the coder finishing its
+// work — it must NOT be re-routed, or execution oscillates with the planner and
+// loops. New user turns (nothing after the last user message) are not
+// continuations and are routed normally.
+func isToolContinuation(req ChatRequest) bool {
+	lastUser := -1
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			lastUser = i
+			break
+		}
+	}
+	for i := lastUser + 1; i < len(req.Messages); i++ {
+		m := req.Messages[i]
+		if m.Role == "tool" || m.ToolCallID != "" {
+			return true
+		}
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && string(m.ToolCalls) != "null" {
+			return true
+		}
+	}
+	return false
+}
+
 // BuildMessages assembles the append-only prompt for the chosen role.
 //
 // Layout (stable prefix first, so llama.cpp reuses the warm KV):
@@ -185,8 +249,27 @@ func BuildMessages(store *Store, discID int64, role, systemJSON, userMsg string)
 		if role == "coder" {
 			contract = coderContract
 		}
-		appended = append(appended, systemMessages(systemJSON)...)
-		appended = append(appended, TextMessage("system", contract))
+		// Merge the IDE's system message(s) AND our role contract into a SINGLE
+		// leading system message. Many chat templates (Qwen3.x, etc.) reject any
+		// system message that isn't the very first entry, so appending the
+		// contract as a second system message makes llama.cpp fail to apply the
+		// template ("System message must be at the beginning") whenever the IDE
+		// also sent a system prompt. One combined system message is template-safe
+		// and preserves the same stable, cacheable prefix.
+		var sys strings.Builder
+		for _, m := range systemMessages(systemJSON) {
+			if txt := m.Text(); txt != "" {
+				if sys.Len() > 0 {
+					sys.WriteString("\n\n")
+				}
+				sys.WriteString(txt)
+			}
+		}
+		if sys.Len() > 0 {
+			sys.WriteString("\n\n")
+		}
+		sys.WriteString(contract)
+		appended = append(appended, TextMessage("system", sys.String()))
 	}
 
 	switch role {
@@ -194,7 +277,7 @@ func BuildMessages(store *Store, discID int64, role, systemJSON, userMsg string)
 		// Inject the scoped subtask drawn from the latest plan — never the
 		// planner's full reasoning. This is what keeps the coder's prefill tiny.
 		if plan, ok := store.LatestUnconsumedPlan(discID); ok {
-			task := "Execute this plan in full: complete every subtask in order, then emit a single FINISH line at the very end.\n\n" + plan
+			task := "Execute this plan now. Complete every subtask in dependency order using your tools, then emit a single FINISH line at the very end.\n\n" + planToChecklist(plan)
 			if userMsg != "" {
 				task += "\n\nUser note: " + userMsg
 			}
@@ -208,9 +291,11 @@ func BuildMessages(store *Store, discID int64, role, systemJSON, userMsg string)
 
 	default: // planner
 		// Fold any coder summaries into the planner's context before the new
-		// user turn, so the planner "sees" what was executed (append-only).
+		// user turn, so the planner "sees" what was executed (append-only). These
+		// go in as USER notes, not system messages: a system message here would
+		// be mid-conversation and break templates that require system to be first.
 		for _, sum := range store.PopSummaries(discID) {
-			appended = append(appended, TextMessage("system", "[coder result] "+sum))
+			appended = append(appended, TextMessage("user", "[coder result] "+sum))
 		}
 		if userMsg != "" {
 			appended = append(appended, TextMessage("user", userMsg))
@@ -221,17 +306,138 @@ func BuildMessages(store *Store, discID int64, role, systemJSON, userMsg string)
 	return full, appended
 }
 
-// ExtractPlan pulls a fenced ```plan ...``` block from planner output, if any.
+// planToChecklist renders a plan as a clean, ordered instruction list for the
+// coder: id, goal, success criterion and dependency order only. The planner's
+// per-subtask "tools" and "context_refs" metadata is deliberately dropped — the
+// coder already has the client's full tool set, and weak models misread those
+// hints as hard restrictions and stall (e.g. "tools=[read_file] but I need to
+// write a file…"). Falls back to the raw JSON if it can't be parsed.
+func planToChecklist(planJSON string) string {
+	var p struct {
+		Subtasks []struct {
+			ID        string   `json:"id"`
+			Goal      string   `json:"goal"`
+			Success   string   `json:"success"`
+			DependsOn []string `json:"depends_on"`
+		} `json:"subtasks"`
+	}
+	if json.Unmarshal([]byte(planJSON), &p) != nil || len(p.Subtasks) == 0 {
+		return planJSON
+	}
+	var b strings.Builder
+	for i, st := range p.Subtasks {
+		fmt.Fprintf(&b, "%d. ", i+1)
+		if st.ID != "" {
+			fmt.Fprintf(&b, "[%s] ", st.ID)
+		}
+		b.WriteString(strings.TrimSpace(st.Goal))
+		if len(st.DependsOn) > 0 {
+			fmt.Fprintf(&b, " (after %s)", strings.Join(st.DependsOn, ", "))
+		}
+		if s := strings.TrimSpace(st.Success); s != "" {
+			b.WriteString("\n   done when: " + s)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// ExtractPlan pulls a plan from planner output. Preferred shape is a fenced
+// ```plan ...``` block, but weak models often drop the label, wrap it as
+// ```json, or emit the bare object — so we fall back to scanning for the first
+// valid JSON object that carries a "subtasks" key.
 func ExtractPlan(assistant string) (string, bool) {
-	m := planBlockRe.FindStringSubmatch(assistant)
-	if len(m) < 2 {
-		return "", false
+	// 1. Preferred: the fenced ```plan body. The fence delimiters survive even
+	//    when the JSON inside is malformed, so repair it here directly — a stray
+	//    missing quote desyncs the brace scanner below, so that path can't.
+	if m := planBlockRe.FindStringSubmatch(assistant); len(m) >= 2 {
+		body := strings.TrimSpace(m[1])
+		if json.Valid([]byte(body)) {
+			return body, true
+		}
+		if r := repairJSON(body); json.Valid([]byte(r)) && strings.Contains(r, `"subtasks"`) {
+			return r, true
+		}
 	}
-	s := strings.TrimSpace(m[1])
-	if !json.Valid([]byte(s)) {
-		return "", false
+	// 2. No (usable) fence: scan for a subtasks object in the raw text.
+	if s, ok := findSubtasksObject(assistant); ok {
+		return s, true
 	}
-	return s, true
+	// 3. Last resort: repair the whole text, then re-scan — handles a malformed
+	//    bare object whose stray quote desynced the first scan.
+	if r := repairJSON(assistant); r != assistant {
+		if s, ok := findSubtasksObject(r); ok {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+// findSubtasksObject returns the first balanced {...} in s that carries a
+// "subtasks" key and parses as JSON. If the object is balanced but invalid, a
+// bounded repair (see repairJSON) is attempted and re-validated, so weak-model
+// JSON is rescued without ever returning unparseable garbage.
+func findSubtasksObject(s string) (string, bool) {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
+		depth, inStr, esc := 0, false, false
+		for j := i; j < len(s); j++ {
+			c := s[j]
+			if inStr {
+				switch {
+				case esc:
+					esc = false
+				case c == '\\':
+					esc = true
+				case c == '"':
+					inStr = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inStr = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					cand := s[i : j+1]
+					if strings.Contains(cand, `"subtasks"`) {
+						if json.Valid([]byte(cand)) {
+							return cand, true
+						}
+						if r := repairJSON(cand); json.Valid([]byte(r)) && strings.Contains(r, `"subtasks"`) {
+							return r, true
+						}
+					}
+					j = len(s) // this object isn't it; restart from the next '{'
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// missingKeyQuoteRe spots an object key that lost its opening quote
+// (`,depends_on":` instead of `,"depends_on":`) — a key position is a `{` or `,`
+// followed by a bareword and a closing quote+colon. A correctly quoted key has a
+// `"` right after the delimiter, so it never matches.
+var missingKeyQuoteRe = regexp.MustCompile(`([{,]\s*)([A-Za-z_]\w*)("\s*:)`)
+
+// trailingCommaRe spots a comma immediately before a closing } or ].
+var trailingCommaRe = regexp.MustCompile(`,(\s*[}\]])`)
+
+// repairJSON makes a best-effort pass at the two malformations weak models most
+// often produce in otherwise-valid JSON: a key missing its opening quote and a
+// trailing comma. It is only used as a fallback after strict parsing fails, and
+// callers re-validate the result, so a bad repair yields "no plan", not garbage.
+func repairJSON(s string) string {
+	s = missingKeyQuoteRe.ReplaceAllString(s, `${1}"${2}${3}`)
+	s = trailingCommaRe.ReplaceAllString(s, `${1}`)
+	return s
 }
 
 // ExtractSummary pulls the coder's self-emitted "FINISH: ..." line.

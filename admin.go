@@ -88,7 +88,7 @@ func binFor(cfg Config, up Upstream) string {
 }
 
 // routerUpstream adapts the router config into an Upstream so the same engine
-// machinery can launch a managed router model (mode "llm").
+// machinery can launch a managed router model.
 func routerUpstream(cfg Config) Upstream {
 	r := cfg.Router
 	slots := r.Slots
@@ -125,18 +125,20 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request) {
 	pUsed, pSize := a.proxy.SlotStats("planner")
 	cUsed, cSize := a.proxy.SlotStats("coder")
 
-	routerConfigured := cfg.Router.Mode != "llm" || (cfg.Router.BaseURL != "" && cfg.Router.Model != "")
-	routerReachable := cfg.Router.Mode != "llm" || HealthAt(cfg.Router.BaseURL, engineByID(cfg.Router.Engine).HealthPath)
+	// The router model is the only routing brain, so it is always required.
+	routerConfigured := cfg.Router.BaseURL != "" && cfg.Router.Model != ""
+	routerReachable := HealthAt(cfg.Router.BaseURL, engineByID(cfg.Router.Engine).HealthPath)
 
 	writeJSON(w, map[string]any{
 		"running":     a.proxy.Ready(),
+		"phase":       a.proxy.Phase(),    // "running" | "starting" | "stopped"
+		"starting":    a.proxy.Starting(), // autostart loading window
 		"listen_addr": cfg.ListenAddr,
 		"llama_bin":   cfg.LlamaBin,
 		"autostart":   cfg.AutoStart,
 		"planner":     a.upStatus(cfg.Planner, pUsed, pSize, a.mgr.Running("planner")),
 		"coder":       a.upStatus(cfg.Coder, cUsed, cSize, a.mgr.Running("coder")),
 		"router": map[string]any{
-			"mode":       cfg.Router.Mode,
 			"configured": routerConfigured,
 			"reachable":  routerReachable,
 			"process":    a.mgr.Running("router"),
@@ -145,9 +147,10 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request) {
 			"hf_repo":    cfg.Router.HFRepo,
 			"hf_file":    cfg.Router.HFFile,
 		},
-		"slot_save_path": cfg.SlotSavePath,
-		"last_route":     a.proxy.LastRoute(),
-		"discussions":    a.proxy.store.CountDiscussions(),
+		"slot_save_path":     cfg.SlotSavePath,
+		"last_route":         a.proxy.LastRoute(),
+		"last_route_fallback": a.proxy.LastRouteFallback(),
+		"discussions":        a.proxy.store.CountDiscussions(),
 	})
 }
 

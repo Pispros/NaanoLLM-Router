@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,15 +24,21 @@ import (
 // (Cline, Roo, JetBrains, ...) emit turns that are tool_calls with little or no
 // text; those calls are what makes such a turn identifiable across requests.
 func Forward(ctx context.Context, up Upstream, slot int, raw map[string]any, msgs []Message, stream bool, w io.Writer, flush func()) (string, json.RawMessage, error) {
-	raw["messages"] = msgs
+	if msgs != nil {
+		raw["messages"] = msgs // nil => forward the client's messages untouched (utility passthrough)
+	}
 	raw["model"] = up.Model
 	raw["stream"] = stream
 	if isLlamaCpp(up.Engine) {
-		raw["cache_prompt"] = true // reuse this discussion's own warm prefix (llama.cpp)
-		raw["id_slot"] = slot      // pin the slot assigned to this (role, discussion)
+		raw["cache_prompt"] = true // reuse a warm prefix (llama.cpp)
+		if slot >= 0 {
+			raw["id_slot"] = slot // pin this (role, discussion)'s slot; slot<0 = let the engine choose
+		}
 	}
 
 	b, _ := json.Marshal(raw)
+	log.Printf("FWD -> %s/v1/chat/completions model=%v stream=%v id_slot=%v cache_prompt=%v bytes=%d",
+		up.BaseURL, raw["model"], raw["stream"], raw["id_slot"], raw["cache_prompt"], len(b))
 	req, err := http.NewRequestWithContext(ctx, "POST", up.BaseURL+"/v1/chat/completions", bytes.NewReader(b))
 	if err != nil {
 		return "", nil, err
@@ -45,6 +52,7 @@ func Forward(ctx context.Context, up Upstream, slot int, raw map[string]any, msg
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
+		log.Printf("FWD <- %s status=%s body=%s", up.Name, resp.Status, snip(msg))
 		return "", nil, fmt.Errorf("upstream %s: %s: %s", up.Name, resp.Status, string(msg))
 	}
 

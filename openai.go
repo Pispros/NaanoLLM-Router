@@ -49,4 +49,10 @@ type ChatRequest struct {
 	Messages []Message       `json:"messages"`
 	Stream   bool            `json:"stream"`
 	Tools    json.RawMessage `json:"tools,omitempty"`
+	// PromptCacheKey is the OpenAI stable client identifier (it replaces the
+	// legacy `user` field). Clients that mint one per conversation thread — Zed
+	// emits a fixed UUID for every turn of a thread — hand us a content-free,
+	// collision-free conversation id. When present it is the primary discussion
+	// key; see Store.ResolveDiscussion.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }

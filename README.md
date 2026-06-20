@@ -222,6 +222,13 @@ Open the control panel at `http://localhost:4000/`:
 The rail lights up planner or coder as turns are routed; status shows reachability,
 the last route, and the discussion count.
 
+While autostart (or a managed engine launch) is in progress, the UI shows a
+distinct **starting** state instead of a flat "stopped": the sidebar status pill
+pulses *starting…*, the Engine tab shows an auto-start banner, and each dashboard
+card spins on *loading* rather than the alarming red *offline* until its
+`/health` answers. During that window `/v1` returns `503` with a *"server is
+starting"* message and a `Retry-After` header instead of *"not started"*.
+
 The **?** button in the top-right opens an in-app help chat: it answers questions
 about naanollm-router by streaming from your configured planner model, with this
 app's documentation supplied as context (so the planner must be reachable).
@@ -262,8 +269,37 @@ system prompt, the tools array, or user-message wrappers staying constant.
 - Coder ends its final message with a line `FINISH: <2-3 line summary>`; llmrouter
   captures it and appends it to the planner's context on the next planner turn.
 
-Both contracts are injected as a short extra system note, so they coexist with an
-IDE's own large system prompt.
+Both contracts are folded into the **single leading system message**, alongside
+the IDE's own system prompt. They are deliberately *not* added as a separate
+system message: many chat templates (Qwen3.x and others) reject any `system`
+message that isn't the very first entry, and a second one makes llama.cpp refuse
+the request with *"System message must be at the beginning."* Coder result notes
+folded back to the planner are added as `user` notes for the same reason.
+
+## Troubleshooting & observability
+
+Quick notes from real debugging sessions:
+
+- **Errors are surfaced, not swallowed.** When an upstream call fails, the router
+  logs it (`ERR forward …` / `FWD <- status=…` with the body) and, in streaming
+  mode, emits an SSE `error` chunk so the IDE shows the reason instead of a
+  silently cut, empty stream.
+- **`LLMROUTER_DEBUG=1`** dumps each incoming request body and key decisions
+  (`REQ …` with `ephemeral=`, `tools=`, `max_tokens=`; `ROUTE … slot=`;
+  `FWD -> …` with `id_slot`). Run with it when a client misbehaves but `curl`
+  doesn't.
+- ***"System message must be at the beginning"* (HTTP 400).** The model's chat
+  template requires a single leading `system` message. The router now merges the
+  IDE's system prompt and its role contract into one — but **existing discussions
+  in `llmrouter.db` keep their old layout**, so delete/rename the DB (or clear
+  `model_contexts`) after upgrading to clear stale prefixes.
+- **A slot is created but the task never starts.** Usually slot contention: the
+  pinned real turn and an unpinned utility request (IDE thread-title generation)
+  both land on the same llama-server. Make sure `-np` on each llama-server
+  matches the **Slots** count configured for that role.
+- **Reproduce without the IDE.** `curl -N …/v1/chat/completions` with
+  `"stream":true` and, if needed, a `tools` array isolates whether the problem is
+  the router pipeline or something the IDE adds to the payload.
 
 ## Files
 
@@ -275,10 +311,13 @@ store.go     SQLite: discussions, per-role context, plans, summaries (text only)
 openai.go    OpenAI request/response types
 router.go    intent routing: state rule + optional GBNF tiny model
 prompt.go    conversation signature (transcript + tool_calls), append-only prompt
-             building, plan/summary parsing
+             building (single merged leading system message), plan/summary parsing
 upstream.go  llama-server client: id_slot/cache_prompt, streaming tee that also
-             reassembles tool_calls, slot save/restore
-proxy.go     /v1 handler: resolve -> route -> build -> assign slot -> forward -> persist
+             reassembles tool_calls, slot save/restore; logs the outgoing request
+             and any non-200 body
+proxy.go     /v1 handler: resolve -> route -> build -> assign slot -> forward -> persist;
+             request/decision logging, surfaces upstream errors (SSE error chunk),
+             starting/running/stopped lifecycle phase
 admin.go     control-panel API + embedded UI
 slots.go     per-role slot pool: maps each (role, discussion) to a slot, LRU eviction
 web/index.html  the control panel (sidebar dashboard)

@@ -73,6 +73,10 @@ func main() {
 // waits for them to become healthy (model downloads can take a while), then
 // arms the /v1 endpoint.
 func autoStart(snap Config, mgr *Manager, proxy *Proxy) {
+	// Enter the loading state immediately so the dashboard and /v1 report
+	// "starting" from the moment the binary boots, not a flat "stopped".
+	proxy.BeginStarting()
+	log.Printf("autostart: launching engines, /v1 will arm once planner+coder are healthy")
 	for _, up := range []Upstream{snap.Planner, snap.Coder} {
 		bin := up.BinPath
 		if strings.TrimSpace(bin) == "" {
@@ -82,7 +86,8 @@ func autoStart(snap Config, mgr *Manager, proxy *Proxy) {
 			log.Printf("autostart %s: %v", up.Name, err)
 		}
 	}
-	if snap.Router.Mode == "llm" {
+	// The router model is the only routing brain — always launch it.
+	{
 		ru := routerUpstream(snap)
 		bin := ru.BinPath
 		if strings.TrimSpace(bin) == "" {
@@ -95,9 +100,10 @@ func autoStart(snap Config, mgr *Manager, proxy *Proxy) {
 	okP := WaitHealthy(snap.Planner.BaseURL, engineByID(snap.Planner.Engine).HealthPath, 5*time.Minute)
 	okC := WaitHealthy(snap.Coder.BaseURL, engineByID(snap.Coder.Engine).HealthPath, 5*time.Minute)
 	if okP && okC {
-		_ = proxy.Start()
+		_ = proxy.Start() // also clears the starting flag
 		log.Printf("autostart: planner+coder healthy, /v1 armed")
 		return
 	}
+	proxy.AbortStarting()
 	log.Printf("autostart: upstreams not healthy (planner=%v coder=%v) — arm manually from the panel", okP, okC)
 }

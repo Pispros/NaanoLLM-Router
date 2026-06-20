@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -19,11 +20,13 @@ const schema = `
 CREATE TABLE IF NOT EXISTS discussions (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   anchor_key  TEXT NOT NULL,                 -- normalized first-user hash (first-turn dedup only)
+  client_key  TEXT NOT NULL DEFAULT '',      -- client-supplied conversation id (OpenAI prompt_cache_key); primary identity when set
   system_json TEXT NOT NULL,                 -- last seen system messages (display/debug; NOT identity)
   tools_json  TEXT NOT NULL,                 -- last seen tools array (display/debug; NOT identity)
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_discussions_anchor ON discussions(anchor_key);
+CREATE INDEX IF NOT EXISTS idx_discussions_client_key ON discussions(client_key);
 CREATE TABLE IF NOT EXISTS turns (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   discussion_id INTEGER NOT NULL,
@@ -83,6 +86,13 @@ func OpenStore(path string) (*Store, error) {
 func migrate(db *sql.DB) error {
 	if err := migrateDiscussions(db); err != nil {
 		return err
+	}
+	// Existing DBs predate the client-key column; add it before the schema DDL
+	// (and its index) runs, so old rows survive and pick up the new column.
+	if tableExists(db, "discussions") && !columnExists(db, "discussions", "client_key") {
+		if _, err := db.Exec(`ALTER TABLE discussions ADD COLUMN client_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
 	}
 	if tableExists(db, "turns") && !columnExists(db, "turns", "anchor_sig") {
 		if _, err := db.Exec(`ALTER TABLE turns ADD COLUMN anchor_sig TEXT NOT NULL DEFAULT ''`); err != nil {
@@ -176,14 +186,121 @@ func now() int64 { return time.Now().Unix() }
 // Each anchor is turnAnchor(text, tool_calls), so turns that are pure tool_calls
 // (common with Cline/Roo/JetBrains agents) are still strong, distinct anchors.
 func (s *Store) ResolveDiscussion(sig ConvSig) (int64, error) {
+	// Primary key: a client-supplied stable conversation id (OpenAI
+	// prompt_cache_key). When the client sends one it IS the conversation — it is
+	// stable across every turn of a thread, distinct between threads, and does
+	// not depend on message content. That makes it immune to the transcript
+	// fragmentation below (reasoning leaking into re-sent content, edited
+	// history, twin "Hello" threads), and it also pins the same id_slot to the
+	// thread so the warm KV is reused instead of recomputed cold each turn.
+	if sig.ClientKey != "" {
+		id, err := s.resolveByClientKey(sig)
+		if err == nil {
+			log.Printf("DISC resolve: client_key=%s -> discID=%d", sig.ClientKey, id)
+		}
+		return id, err
+	}
+	// Fallback (clients that send no prompt_cache_key): match on the assistant
+	// transcript the client echoes back each turn.
 	if len(sig.Anchors) == 0 {
-		return s.resolveFirstTurn(sig)
+		id, err := s.resolveFirstTurn(sig)
+		log.Printf("DISC resolve: first-turn (no assistant history) -> discID=%d", id)
+		return id, err
 	}
 	if id, ok := s.matchByTranscript(sig.Anchors); ok {
+		log.Printf("DISC resolve: matched %d incoming anchor(s) -> discID=%d", len(sig.Anchors), id)
 		return id, nil
+	}
+	// No stored transcript is a prefix of the incoming one: the continuation
+	// failed to match. This is the usual culprit behind a fragmented
+	// conversation (a fresh discussion per turn, so plans/handoffs are lost).
+	log.Printf("DISC resolve: NO MATCH for %d incoming anchor(s) -> creating a NEW discussion", len(sig.Anchors))
+	if debugOn {
+		dumpAnchorDivergence(s, sig.Anchors)
 	}
 	// Assistant history present but unrecognised (edited history, or a chat that
 	// predates the router): start a fresh discussion anchored on its first user.
+	return s.createDiscussion(sig)
+}
+
+// dumpAnchorDivergence prints the incoming anchor sequence next to every stored
+// discussion's sequence, so the exact point of divergence is visible in the log.
+func dumpAnchorDivergence(s *Store, incoming []string) {
+	log.Printf("  incoming anchors: %s", shortAnchors(incoming))
+	rows, err := s.db.Query(`SELECT id FROM discussions ORDER BY id DESC LIMIT 5`)
+	if err != nil {
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		stored := s.anchorSequence(id)
+		log.Printf("  discID=%d stored : %s (common prefix=%d)", id, shortAnchors(stored), commonPrefixLen(stored, incoming))
+	}
+	if len(ids) > 0 {
+		// Show the actual stored assistant text of the most recent discussion so
+		// it can be compared against the client's re-sent transcript (the usual
+		// divergence with reasoning models: reasoning text leaking into content).
+		trows, err := s.db.Query(`SELECT seq, assistant_msg FROM turns WHERE discussion_id=? ORDER BY seq`, ids[0])
+		if err == nil {
+			for trows.Next() {
+				var seq int
+				var msg sql.NullString
+				if trows.Scan(&seq, &msg) == nil {
+					log.Printf("  discID=%d turn %d stored assistant: %q", ids[0], seq, short(normAssistant(msg.String)))
+				}
+			}
+			trows.Close()
+		}
+	}
+}
+
+func short(s string) string {
+	const max = 160
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+func shortAnchors(a []string) string {
+	if len(a) == 0 {
+		return "[]"
+	}
+	out := "["
+	for i, s := range a {
+		if i > 0 {
+			out += " "
+		}
+		if len(s) > 8 {
+			out += s[:8]
+		} else {
+			out += s
+		}
+	}
+	return out + "]"
+}
+
+// resolveByClientKey resolves (or creates) the discussion bound to a client's
+// stable conversation id. The newest match wins, mirroring resolveFirstTurn, so
+// a reused/forked key still lands on its most recent discussion.
+func (s *Store) resolveByClientKey(sig ConvSig) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM discussions WHERE client_key=? ORDER BY id DESC LIMIT 1`,
+		sig.ClientKey).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
 	return s.createDiscussion(sig)
 }
 
@@ -205,8 +322,8 @@ func (s *Store) resolveFirstTurn(sig ConvSig) (int64, error) {
 
 func (s *Store) createDiscussion(sig ConvSig) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO discussions(anchor_key, system_json, tools_json, created_at) VALUES(?,?,?,?)`,
-		sig.AnchorKey, sig.SystemJSON, sig.ToolsJSON, now())
+		`INSERT INTO discussions(anchor_key, client_key, system_json, tools_json, created_at) VALUES(?,?,?,?,?)`,
+		sig.AnchorKey, sig.ClientKey, sig.SystemJSON, sig.ToolsJSON, now())
 	if err != nil {
 		return 0, err
 	}
